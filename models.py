@@ -233,6 +233,8 @@ class Task(models.Model):
     archived = models.BooleanField(default=False) # for history
     required_methods = models.CharField(max_length=200, default='')  # comma-separated list of the required methods
 
+    def __unicode__(self):
+        return u'%s - %s.%s.%s' % (self.id, self.model.split('.')[-1], self.object_id, self.method)
 
     STATUS_TABLE = {'defined': 'Ready for scan',
                     'scheduled': 'Scan scheduled',
