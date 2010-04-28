@@ -31,7 +31,7 @@ import time
 import sys
 from django.db import models
 from datetime import datetime
-from os.path import join, exists
+from os.path import join, exists, dirname, abspath
 from collections import defaultdict
 from django.db import transaction, connection
 
@@ -130,11 +130,11 @@ class TaskManager(models.Manager):
             transaction.commit_unless_managed()
 
     def mark_start(self, pk, pid):
-        # Set the start informations in all cases...
+        # Set the start information in all cases...
         from django.utils import version
-        revision = version.get_svn_revision(__file__[0])[4:]
+        import settings
         try:
-            revision = int(version.get_svn_revision(__file__[0])[4:])
+            revision = int(version.get_svn_revision(dirname(settings.__file__))[4:])
         except:
             revision = 0
         try:
@@ -214,6 +214,16 @@ def _my_import(name):
     return mod
 
 
+STATUS_TABLE = [('defined', 'Ready for scan'),
+                ('scheduled', 'Scan scheduled'),
+                ('running', 'Scan in progress',),
+                ('requested_cancel', 'Scan cancelled'),
+                ('cancelled', 'Scan cancelled'),
+                ('successful', 'Successfully scanned'),
+                ('unsuccessful', 'Scan error'),
+                ]
+
+          
 class Task(models.Model):
 
     model = models.CharField(max_length=200)
@@ -222,32 +232,29 @@ class Task(models.Model):
     object_id = models.CharField(max_length=200)
     pid = models.IntegerField(null=True)
 
-    end_date = models.DateTimeField(null=True)
     start_date = models.DateTimeField(null=True)
+    end_date = models.DateTimeField(null=True)
+
     revision = models.IntegerField(null=True, default=0) # Subversion revision of the code used to run a task
     status = models.CharField(max_length=200,
-                              default="defined") # for values for status, see the STATUS_TABLE below
-    description = models.CharField(max_length=100, default='')
-    log = models.TextField(default='')
+                              default="defined",
+                              choices=STATUS_TABLE,
+                              )
+    description = models.CharField(max_length=100, default='', null=True, blank=True)
+    log = models.TextField(default='', null=True, blank=True)
 
     archived = models.BooleanField(default=False) # for history
-    required_methods = models.CharField(max_length=200, default='')  # comma-separated list of the required methods
+    required_methods = models.CharField(max_length=200, default='', null=True, blank=True)  # comma-separated list of the required methods
 
     def __unicode__(self):
         return u'%s - %s.%s.%s' % (self.id, self.model.split('.')[-1], self.object_id, self.method)
 
-    STATUS_TABLE = {'defined': 'Ready for scan',
-                    'scheduled': 'Scan scheduled',
-                    'running': 'Scan in progress', 
-                    'requested_cancel': 'Scan cancelled',
-                    'cancelled': 'Scan cancelled',
-                    'successful': 'Successfully scanned',
-                    'unsuccessful': 'Scan error',
-                    }
-
-          
     def status_string(self):
-        return self.STATUS_TABLE[self.status]
+        '''
+        Display the status (probably a computed field based on tasks: 
+        "Scan scheduled", "Scan in progress"
+        '''
+        return dict(STATUS_TABLE)[self.status]
 
     # Only for use by the manager: do not call directly
     def do_run(self):
@@ -258,7 +265,6 @@ class Task(models.Model):
             import sys
             import time
             import subprocess
-            from os.path import abspath, dirname, join
 
             returncode = -1
             try:

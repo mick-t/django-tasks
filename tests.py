@@ -267,6 +267,17 @@ class ViewsTestCase(unittest.TestCase):
         self.assertEquals('defined', task.status)
         self.assertEquals('run_something', task.method)
 
+    def test_tasks_revision(self):
+        task = Task.objects.task_for_object(TestModel, 'key2', 'run_something')
+        Task.objects.mark_start(task.pk, '12345')
+        task = Task.objects.task_for_object(TestModel, 'key2', 'run_something')
+        from os.path import exists, dirname, join
+        import settings
+        if exists(join(dirname(settings.__file__), '.svn')):
+            self.assertTrue(task.revision > 0)
+        else:
+            self.assertEquals(0, task.revision)
+
     def test_tasks_archive_task(self):
         tasks = Task.objects.tasks_for_object(TestModel, 'key3')
         task = tasks[0]
