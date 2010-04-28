@@ -217,9 +217,15 @@ class ViewsTestCase(unittest.TestCase):
             Task.objects._do_schedule()
         time.sleep(5)
         Task.objects.cancel_task(task.pk)
-        with StandardOutputCheck(self, "Cancelling task " + str(task.pk) + "... cancelled.\n"):
+        output_check = StandardOutputCheck(self, fail_if_different=False)
+        with output_check:
             Task.objects._do_schedule()
-        time.sleep(1)
+            time.sleep(1)
+        self.assertTrue(("Cancelling task " + str(task.pk) + "...") in output_check.stdoutvalue)
+        self.assertTrue("cancelled.\n" in output_check.stdoutvalue)
+        self.assertTrue('INFO: failed to mark tasked as finished, from status "running" to "unsuccessful" for task 3. May have been finished in a different thread already.\n'
+                        in output_check.stdoutvalue)
+
         new_task = Task.objects.get(pk=task.pk)
         self.assertEquals("cancelled", new_task.status)            
         self.assertTrue(u'running something...' in new_task.log)
@@ -269,6 +275,7 @@ class ViewsTestCase(unittest.TestCase):
 
     def test_tasks_revision(self):
         task = Task.objects.task_for_object(TestModel, 'key2', 'run_something')
+        Task.objects.run_task(task.pk)
         Task.objects.mark_start(task.pk, '12345')
         task = Task.objects.task_for_object(TestModel, 'key2', 'run_something')
         from os.path import exists, dirname, join
@@ -350,3 +357,23 @@ class ViewsTestCase(unittest.TestCase):
         tasks = Task.objects.tasks_for_object(TestModel, 'key3')
         self.assertEquals(new_task.pk, tasks[5].pk)
         
+
+    def test_tasks_exception_in_thread(self):
+        task = self._create_task(TestModel.run_something, 'key1')
+        Task.objects.run_task(task.pk)
+        task = self._create_task(TestModel.run_something, 'key1')
+        task_delete = self._create_task(TestModel.run_something, 'key1')
+        task_delete.delete()
+        try:
+            Task.objects.get(pk=task.pk)
+            self.fail("Should throw an exception")
+        except Exception, e:
+            self.assertEquals("Task matching query does not exist.", str(e))
+            
+        output_check = StandardOutputCheck(self, fail_if_different=False)
+        with output_check:
+            task.do_run()
+            time.sleep(2)
+        self.assertTrue("Exception: Failed to mark task with " in output_check.stdoutvalue)
+        self.assertTrue("as started, task does not exist" in output_check.stdoutvalue)
+        self.assertTrue('INFO: failed to mark tasked as finished, from status "running" to "unsuccessful" for task' in output_check.stdoutvalue)

@@ -29,6 +29,9 @@
 import os
 import time
 import sys
+import time
+import subprocess
+
 from django.db import models
 from datetime import datetime
 from os.path import join, exists, dirname, abspath
@@ -101,8 +104,7 @@ class TaskManager(models.Manager):
 
         # If the task is still scheduled, mark it requested for cancellation also:
         # if it is currently starting, that's OK, it'll stay marked as "requested_cancel" in mark_start
-        self._set_status(pk, "requested_cancel", "scheduled")
-        self._set_status(pk, "requested_cancel", "running")
+        self._set_status(pk, "requested_cancel", ["scheduled", "running"])
 
 
     # The methods below are for internal use on the server. Don't use them directly.
@@ -126,8 +128,12 @@ class TaskManager(models.Manager):
 
     def append_log(self, pk, log):
         if log:
-            connection.cursor().execute('UPDATE ' + Task._meta.db_table + ' SET log = log || %s WHERE id = %s', [log, pk])
-            transaction.commit_unless_managed()
+            try:
+                rowcount = connection.cursor().execute('UPDATE ' + Task._meta.db_table + ' SET log = log || %s WHERE id = %s', [log, pk]).rowcount
+                if rowcount == 0:
+                    raise Exception(("Failed to mark save log for task %d, task does not exist; log was:\n" % pk) + log)
+            finally:
+                transaction.commit_unless_managed()
 
     def mark_start(self, pk, pid):
         # Set the start information in all cases...
@@ -138,11 +144,13 @@ class TaskManager(models.Manager):
         except:
             revision = 0
         try:
-            connection.cursor().execute('UPDATE ' + Task._meta.db_table + ' SET start_date = %s, pid = %s, revision = %s WHERE id = %s', 
-                                        [datetime.now(),
-                                         pid, 
-                                         revision,
-                                         pk])
+            rowcount = connection.cursor().execute('UPDATE ' + Task._meta.db_table + ' SET start_date = %s, pid = %s, revision = %s WHERE id = %s', 
+                                                   [datetime.now(),
+                                                    pid, 
+                                                    revision,
+                                                    pk]).rowcount
+            if rowcount == 0:
+                raise Exception("Failed to mark task with ID %d as started, task does not exist" % pk)
         finally:
             transaction.commit_unless_managed()
 
@@ -151,16 +159,29 @@ class TaskManager(models.Manager):
         self._set_status(pk, "running", "scheduled")
 
     def _set_status(self, pk, new_status, existing_status):
-        connection.cursor().execute('UPDATE ' + Task._meta.db_table + ' SET status = %s WHERE id = %s AND status = %s', [new_status, pk, existing_status])
-        transaction.commit_unless_managed()
+        try:
+            if isinstance(existing_status, str):
+                existing_status = [ existing_status ]
+                
+            rowcount = connection.cursor().execute('UPDATE ' + Task._meta.db_table + ' SET status = %s WHERE id = %s AND status IN ' 
+                                                   "(" + ", ".join(["%s"] * len(existing_status)) + ")",
+                                                   [new_status, pk] + existing_status).rowcount
+            if rowcount == 0:
+                print 'WARNING: failed to change status from %s to "%s" for task %s' % ("or".join('"' + status + '"' for status in existing_status), new_status, pk)
+        finally:
+            transaction.commit_unless_managed()
 
 
     def mark_finished(self, pk, new_status, existing_status):
-        connection.cursor().execute('UPDATE ' + Task._meta.db_table + ' SET status = %s, end_date = %s, pid = 0 WHERE id = %s AND status = %s', 
-                                    [new_status, 
-                                     datetime.now(),
-                                     pk, existing_status])
-        transaction.commit_unless_managed()
+        try:
+            rowcount = connection.cursor().execute('UPDATE ' + Task._meta.db_table + ' SET status = %s, end_date = %s WHERE id = %s AND status = %s', 
+                                                   [new_status, 
+                                                    datetime.now(),
+                                                    pk, existing_status]).rowcount
+            if rowcount == 0:
+                print 'INFO: failed to mark tasked as finished, from status "%s" to "%s" for task %s. May have been finished in a different thread already.' % (existing_status, new_status, pk)
+        finally:
+            transaction.commit_unless_managed()
 
     # This is for use on the server. Don't use it directly.
     def exec_task(self, pk):
@@ -262,10 +283,6 @@ class Task(models.Model):
             raise Exception("Task not scheduled, cannot run again")
 
         def exec_thread():
-            import sys
-            import time
-            import subprocess
-
             returncode = -1
             try:
                 import manage
@@ -299,10 +316,13 @@ class Task(models.Model):
 
                 returncode = proc.returncode
             except Exception, e:
+                import traceback
+                stack = traceback.format_exc()
                 try:
-                    Task.objects.append_log(self.pk, "Exception in calling thread: " + str(e))
+                    Task.objects.append_log(self.pk, "Exception in calling thread: " + str(e) + "\n" + stack)
                 except Exception, ee:
                     print "Exception in calling thread: " + str(e)
+                    print stack
                     # if we can't log it, raise it
                     #raise e
 
