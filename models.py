@@ -247,11 +247,7 @@ class Task(models.Model):
 
           
     def status_string(self):
-        '''
-        Display the status (probably a computed field based on tasks: 
-        "Scan scheduled", "Scan in progress"
-        '''
-        return self.STATUS_TABLE[task.status]
+        return self.STATUS_TABLE[self.status]
 
     # Only for use by the manager: do not call directly
     def do_run(self):
