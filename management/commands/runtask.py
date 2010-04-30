@@ -29,7 +29,7 @@
 from django.core.management.base import BaseCommand
 
 class Command(BaseCommand):
-    def handle(self, pk, *args, **options):
+    def handle(self, model, object_id, method, *args, **options):
         from djangotasks.models import Task
-        return Task.objects.exec_task(pk)
+        return Task.objects.exec_task(model, object_id, method)
         

@@ -184,10 +184,12 @@ class TaskManager(models.Manager):
             transaction.commit_unless_managed()
 
     # This is for use on the server. Don't use it directly.
-    def exec_task(self, pk):
-        task = self.get(pk=pk)
+    def exec_task(self, model, object_id, method):
         try:
-            the_method = task.find_method()
+            the_class = _my_import(model)
+            object = the_class.objects.get(pk=object_id)
+            the_method =  getattr(object, method)
+
             the_method()
         finally:
             import sys
@@ -289,7 +291,9 @@ class Task(models.Model):
                 proc = subprocess.Popen([sys.executable, 
                                          manage.__file__, 
                                          'runtask', 
-                                         str(self.pk)],
+                                         self.model, 
+                                         self.object_id, 
+                                         self.method],
                                         stdout=subprocess.PIPE,
                                         stderr=subprocess.STDOUT,
                                         close_fds=True)
