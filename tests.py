@@ -65,7 +65,7 @@ class TestModel(object):
     ''' A mock Model object for task tests'''
     class Manager(object):
         def get(self, pk):
-            if basename(pk) not in ['key1', 'key2', 'key3', 'key with space']:
+            if basename(pk) not in ['key1', 'key2', 'key3', 'key with space', 'key-more']:
                 raise Exception("Not a good object loaded")
             return TestModel(pk)
 
@@ -167,13 +167,13 @@ class ViewsTestCase(unittest.TestCase):
 
 
     def test_tasks_invalid_method(self):
-        self.assertRaises(Exception("No task defined for this method"), 
+        self.assertRaises(Exception("Method 'run_a_method_that_is_not_registered' not registered for model 'djangotasks.tests.TestModel'"), 
                           self._create_task, TestModel.run_a_method_that_is_not_registered, 'key1')
 
         class NotAValidModel(object):
             def a_method(self):
                 pass
-        self.assertRaises(Exception("No task defined for this model"), 
+        self.assertRaises(Exception("'module' object has no attribute 'NotAValidModel'"), 
                           self._create_task, NotAValidModel.a_method, 'key1')
             
         self.assertRaises(Exception("Not a good object loaded"), 
@@ -300,6 +300,10 @@ class ViewsTestCase(unittest.TestCase):
         self.assertEquals('defined', task.status)
         self.assertEquals('run_something_long', task.method)
 
+    def test_tasks_get_task_for_object_required(self):
+        task = Task.objects.task_for_object(TestModel, 'key-more', 'run_something_with_two_required')
+        self.assertEquals('run_something_long,run_something_with_required', task.required_methods)
+        
     def test_tasks_revision(self):
         task = Task.objects.task_for_object(TestModel, 'key2', 'run_something_long')
         Task.objects.run_task(task.pk)

@@ -63,26 +63,29 @@ def register_task(method, documentation, *required_methods):
 class TaskManager(models.Manager):
     DEFINED_TASKS = defaultdict(list)
 
-    def task_for_object(self, the_class, object_id, method):
+    def task_for_object(self, the_class, object_id, method, status_in=None):
         model = _qualified_class_name(the_class)
         if method not in [m for m, _, _ in TaskManager.DEFINED_TASKS[model]]:
             raise Exception("Method '%s' not registered for model '%s'" % (method, model))
 
+        taskdef = [taskdef for taskdef in TaskManager.DEFINED_TASKS[model] 
+                   if taskdef[0] == method][0]
+
+        if not status_in:
+            status_in = dict(STATUS_TABLE).keys()
         return self.get_or_create(model=model, 
                                   method=method,
                                   object_id=str(object_id),
+                                  status__in=status_in,
+                                  description=taskdef[1],
+                                  required_methods=taskdef[2],
                                   archived=False)[0]
 
     def tasks_for_object(self, the_class, object_id):
         model = _qualified_class_name(the_class)
 
-        return [self.get_or_create(model=model, 
-                                   method=method,
-                                   object_id=str(object_id), 
-                                   description=description,
-                                   required_methods=required_methods,
-                                   archived=False)[0]
-                for method, description, required_methods in TaskManager.DEFINED_TASKS[model]]
+        return [self.task_for_object(the_class, object_id, method)
+                for method, _, _ in TaskManager.DEFINED_TASKS[model]]
             
     def run_task(self, pk):
         task = self.get(pk=pk)
@@ -109,22 +112,8 @@ class TaskManager(models.Manager):
 
     # The methods below are for internal use on the server. Don't use them directly.
     def _create_task(self, model, method, object_id):
-        if model not in TaskManager.DEFINED_TASKS:
-            raise Exception("No task defined for this model")
-        if method not in [taskdef[0] for taskdef in TaskManager.DEFINED_TASKS[model]]:
-            raise Exception("No task defined for this method")
-
-        taskdef = [taskdef for taskdef in TaskManager.DEFINED_TASKS[model] 
-                   if taskdef[0] == method][0]
-        task, _ = self.get_or_create(model=model, 
-                                     method=method,
-                                     object_id=str(object_id), 
-                                     status__in=["defined", "scheduled", 
-                                                 "running", "requested_cancel"],
-                                     description = taskdef[1],
-                                     required_methods = taskdef[2],
-                                     archived=False)
-        return task
+        return Task.objects.task_for_object(_my_import(model), object_id, method, 
+                                            ["defined", "scheduled", "running", "requested_cancel"])
 
     def append_log(self, pk, log):
         if log:
@@ -374,16 +363,7 @@ class Task(models.Model):
         super(Task, self).save(*args, **kwargs)
 
     def get_required_tasks(self):
-        def _taskdef(method):
-            return [taskdef for taskdef in TaskManager.DEFINED_TASKS[self.model] 
-                    if taskdef[0] == method][0]
-
-        return [Task.objects.get_or_create(model=self.model, 
-                                           method=method,
-                                           object_id=self.object_id, 
-                                           description = _taskdef(method)[1],
-                                           required_methods = _taskdef(method)[2],
-                                           archived=False)[0]
+        return [Task.objects.task_for_object(_my_import(self.model), self.object_id, method)
                 for method in self.required_methods.split(',') if method]
     
     def find_method(self):
