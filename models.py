@@ -89,6 +89,22 @@ class TaskManager(models.Manager):
             
     def run_task(self, pk):
         task = self.get(pk=pk)
+        for required_task in task.get_required_tasks():
+            if required_task.status in ['scheduled', 'successful', 'running']:
+                continue
+            
+            if required_task.status == 'requested_cancel':
+                raise Exception("Required task being cancelled, please try again")
+
+            if required_task.status in ['cancelled', 'unsuccessful']:
+                # re-run it
+                required_task = self._create_task(required_task.model, 
+                                                  required_task.method, 
+                                                  required_task.object_id)
+
+            required_task.status = "scheduled"
+            required_task.save()                
+            
         if task.status in ["scheduled", "running", 
                            "requested_cancel", ]:
             raise Exception("Task already running, cannot run again")
@@ -120,7 +136,7 @@ class TaskManager(models.Manager):
             try:
                 rowcount = connection.cursor().execute('UPDATE ' + Task._meta.db_table + ' SET log = log || %s WHERE id = %s', [log, pk]).rowcount
                 if rowcount == 0:
-                    raise Exception(("Failed to mark save log for task %d, task does not exist; log was:\n" % pk) + log)
+                    raise Exception(("Failed to save log for task %d, task does not exist; log was:\n" % pk) + log)
             finally:
                 transaction.commit_unless_managed()
 
@@ -210,6 +226,12 @@ class TaskManager(models.Manager):
                             archived=False)
         for task in tasks:
             # only run if all the required tasks have been successful
+            if any(required_task.status == "unsuccessful"
+                   for required_task in task.get_required_tasks()):
+                task.status = "unsuccessful"
+                task.save()
+                continue
+
             if all(required_task.status == "successful"
                    for required_task in task.get_required_tasks()):
                 print "Starting task %s..." % task.pk, 

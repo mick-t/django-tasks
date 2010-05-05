@@ -101,6 +101,13 @@ class TestModel(object):
         self._trigger("run_something_with_required")
         return "finished required"
 
+    def run_something_with_required_failing(self):
+        print "running required..."
+        sys.stdout.flush()
+        time.sleep(0.2)
+        self._trigger("run_something_with_required")
+        return "finished required"
+
     def run_something_with_two_required(self):
         # not called in the tests
         pass
@@ -144,6 +151,7 @@ class ViewsTestCase(unittest.TestCase):
              ('run_something_with_required', "Run a task with a required task", 'run_something_long'),
              ('run_something_with_two_required', "Run a task with two required task", 'run_something_long,run_something_with_required'),
              ('run_something_fast', "Run a fast task", ''),
+             ('run_something_with_required_failing', "Run a task with a required task that fails", 'run_something_failing'),
              ]
         import tempfile
         self.tempdir = tempfile.mkdtemp()
@@ -213,6 +221,10 @@ class ViewsTestCase(unittest.TestCase):
         
     def _reset(self, key, event):
         os.remove(join(self.tempdir, key + event))
+
+    def _assert_status(self, expected_status, task):
+        task = Task.objects.get(pk=task.pk)
+        self.assertEquals(expected_status, task.status)
 
     def test_tasks_run_successful(self):
         task = self._create_task(TestModel.run_something_long, join(self.tempdir, 'key1'))
@@ -287,7 +299,7 @@ class ViewsTestCase(unittest.TestCase):
     
     def test_tasks_get_tasks_for_object(self):
         tasks = Task.objects.tasks_for_object(TestModel, 'key2')
-        self.assertEquals(6, len(tasks))
+        self.assertEquals(7, len(tasks))
         self.assertEquals('defined', tasks[0].status)
         self.assertEquals('defined', tasks[1].status)
         self.assertEquals('run_something_long', tasks[0].method)
@@ -339,30 +351,60 @@ class ViewsTestCase(unittest.TestCase):
         self.assertEquals(['run_something_long', 'run_something_with_required'],
                           [required_task.method for required_task in task.get_required_tasks()])
 
-    def test_tasks_run_required_task(self):
+    def test_tasks_run_required_task_successful(self):
+        required_task = Task.objects.task_for_object(TestModel, join(self.tempdir, 'key1'), 'run_something_long')
         task = self._create_task(TestModel.run_something_with_required, join(self.tempdir, 'key1'))
+        self.assertEquals("defined", required_task.status)
+
         Task.objects.run_task(task.pk)
+        self._assert_status("scheduled", task)
+        self._assert_status("scheduled", required_task)
+
+        with StandardOutputCheck(self, "Starting task " + str(required_task.pk) + "... started.\n"):
+            Task.objects._do_schedule()
+        time.sleep(0.5)
+        self._assert_status("scheduled", task)
+        self._assert_status("running", required_task)
+
+        self._wait_until('key1', 'run_something_long_2')
+        time.sleep(0.5)
+        self._assert_status("scheduled", task)
+        self._assert_status("successful", required_task)
+
+        with StandardOutputCheck(self, "Starting task " + str(task.pk) + "... started.\n"):
+            Task.objects._do_schedule()
+        time.sleep(0.5)
+        self._assert_status("running", task)
+        self._assert_status("successful", required_task)
+        self._wait_until('key1', "run_something_with_required")
+        time.sleep(0.5)
+        self._assert_status("successful", task)
+
+    def test_tasks_run_required_task_failing(self):
+        required_task = Task.objects.task_for_object(TestModel, join(self.tempdir, 'key1'), 'run_something_failing')
+        task = self._create_task(TestModel.run_something_with_required_failing, join(self.tempdir, 'key1'))
+        self.assertEquals("defined", required_task.status)
+
+        Task.objects.run_task(task.pk)
+        self._assert_status("scheduled", task)
+        self._assert_status("scheduled", required_task)
+
+        with StandardOutputCheck(self, "Starting task " + str(required_task.pk) + "... started.\n"):
+            Task.objects._do_schedule()
+        time.sleep(0.5)
+        self._assert_status("scheduled", task)
+        self._assert_status("running", required_task)
+
+        self._wait_until('key1', 'run_something_failing')
+        time.sleep(0.5)
+        self._assert_status("scheduled", task)
+        self._assert_status("unsuccessful", required_task)
+
         with StandardOutputCheck(self):
             Task.objects._do_schedule()
         time.sleep(0.5)
-        new_task = Task.objects.get(pk=task.pk)
-        self.assertEquals("scheduled", new_task.status)
-        
-        required_task = self._create_task(TestModel.run_something_long, join(self.tempdir, 'key1'))
-        Task.objects.run_task(required_task.pk)
-        with StandardOutputCheck(self, "Starting task " + str(required_task.pk) + "... started.\n"):
-            Task.objects._do_schedule()
-        self._wait_until('key1', "run_something_long_2")
-        time.sleep(0.5)
-        new_task = Task.objects.get(pk=required_task.pk)
-        self.assertEquals("successful", new_task.status)
-        
-        with StandardOutputCheck(self, "Starting task " + str(task.pk) + "... started.\n"):
-            Task.objects._do_schedule()
-        self._wait_until('key1', "run_something_with_required")
-        time.sleep(0.5)
-        new_task = Task.objects.get(pk=task.pk)
-        self.assertEquals("successful", new_task.status)
+        self._assert_status("unsuccessful", task)
+        self._assert_status("unsuccessful", required_task)
 
     def test_tasks_run_again(self):
         tasks = Task.objects.tasks_for_object(TestModel, join(self.tempdir, 'key1'))
@@ -374,8 +416,7 @@ class ViewsTestCase(unittest.TestCase):
         self._wait_until('key1', "run_something_fast")
         time.sleep(0.5)
         self._reset('key1', "run_something_fast")
-        new_task = Task.objects.get(pk=task.pk)
-        self.assertEquals("successful", new_task.status)
+        self._assert_status("successful", task)
         Task.objects.run_task(task.pk)
         output_check = StandardOutputCheck(self, fail_if_different=False)
         with output_check:
