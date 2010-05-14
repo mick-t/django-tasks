@@ -290,6 +290,12 @@ class Task(models.Model):
         '''
         return dict(STATUS_TABLE)[self.status]
 
+    def complete_log(self):
+        return '\n'.join([required_task.formatted_log() for required_task in self.get_required_tasks()] + [self.formatted_log()])
+
+    def formatted_log(self):
+        return self.description + " - " + self.status_string() + ":" + (("\n\n" + self.log + "\n") if self.log else " (no log)\n")
+
     # Only for use by the manager: do not call directly
     def do_run(self):
         if self.status != "scheduled":

@@ -379,6 +379,10 @@ class ViewsTestCase(unittest.TestCase):
         self._wait_until('key1', "run_something_with_required")
         time.sleep(0.5)
         self._assert_status("successful", task)
+        task = Task.objects.get(pk=task.pk)
+        self.assertEquals(u'Run a successful task - Successfully scanned:\n\nrunning something...\n' + 
+                          u'still running...\n\n\nRun a task with a required task - Successfully scanned:\n\n' +
+                          u'running required...\n\n', task.complete_log())
 
     def test_tasks_run_required_task_failing(self):
         required_task = Task.objects.task_for_object(TestModel, join(self.tempdir, 'key1'), 'run_something_failing')
@@ -404,7 +408,12 @@ class ViewsTestCase(unittest.TestCase):
             Task.objects._do_schedule()
         time.sleep(0.5)
         self._assert_status("unsuccessful", task)
-        self._assert_status("unsuccessful", required_task)
+        task = Task.objects.get(pk=task.pk)
+        complete_log = task.complete_log()
+        self.assertTrue(complete_log.startswith('Run a failing task - Scan error:\n\nrunning, will fail...\nTraceback (most recent call last):'))
+        self.assertTrue(', in run_something_failing\n    raise Exception("Failed !")\nException: Failed !' in complete_log)
+        self.assertTrue(complete_log.endswith(u'Exception: Failed !\n\n\nRun a task with a required task that fails - Scan error: (no log)\n'))
+        self.assertEquals("unsuccessful", task.status)
 
     def test_tasks_run_again(self):
         tasks = Task.objects.tasks_for_object(TestModel, join(self.tempdir, 'key1'))
