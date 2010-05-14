@@ -73,13 +73,21 @@ class TaskManager(models.Manager):
 
         if not status_in:
             status_in = dict(STATUS_TABLE).keys()
-        return self.get_or_create(model=model, 
-                                  method=method,
-                                  object_id=str(object_id),
-                                  status__in=status_in,
-                                  description=taskdef[1],
-                                  required_methods=taskdef[2],
-                                  archived=False)[0]
+        task, created = self.get_or_create(model=model, 
+                                           method=method,
+                                           object_id=str(object_id),
+                                           status__in=status_in,
+                                           archived=False)
+        if created:
+            task.description = taskdef[1]
+            task.required_methods = taskdef[2]
+            task.save()
+        else:
+            if task.required_methods != taskdef[2]:
+                # not much we can do, since we are unsure which one is the most recent - the code or the DB
+                print 'WARNING: the required methods for task "%s.%s" have changed. You must delete the old tasks manually in the database, and restart the task daemon' % (model, method)
+
+        return task
 
     def tasks_for_object(self, the_class, object_id):
         model = _qualified_class_name(the_class)
@@ -264,10 +272,10 @@ class Task(models.Model):
     method = models.CharField(max_length=200)
     
     object_id = models.CharField(max_length=200)
-    pid = models.IntegerField(null=True)
+    pid = models.IntegerField(null=True, blank=True)
 
-    start_date = models.DateTimeField(null=True)
-    end_date = models.DateTimeField(null=True)
+    start_date = models.DateTimeField(null=True, blank=True)
+    end_date = models.DateTimeField(null=True, blank=True)
 
     revision = models.IntegerField(null=True, default=0) # Subversion revision of the code used to run a task
     status = models.CharField(max_length=200,
