@@ -150,17 +150,10 @@ class TaskManager(models.Manager):
 
     def mark_start(self, pk, pid):
         # Set the start information in all cases...
-        from django.utils import version
-        import settings
         try:
-            revision = int(version.get_svn_revision(dirname(settings.__file__))[4:])
-        except:
-            revision = 0
-        try:
-            rowcount = connection.cursor().execute('UPDATE ' + Task._meta.db_table + ' SET start_date = %s, pid = %s, revision = %s WHERE id = %s', 
+            rowcount = connection.cursor().execute('UPDATE ' + Task._meta.db_table + ' SET start_date = %s, pid = %s WHERE id = %s', 
                                                    [datetime.now(),
                                                     pid, 
-                                                    revision,
                                                     pk]).rowcount
             if rowcount == 0:
                 raise Exception("Failed to mark task with ID %d as started, task does not exist" % pk)
@@ -277,7 +270,6 @@ class Task(models.Model):
     start_date = models.DateTimeField(null=True, blank=True)
     end_date = models.DateTimeField(null=True, blank=True)
 
-    revision = models.IntegerField(null=True, default=0) # Subversion revision of the code used to run a task
     status = models.CharField(max_length=200,
                               default="defined",
                               choices=STATUS_TABLE,
@@ -321,7 +313,8 @@ class Task(models.Model):
                                          self.method],
                                         stdout=subprocess.PIPE,
                                         stderr=subprocess.STDOUT,
-                                        close_fds=True)
+                                        close_fds=True, 
+                                        env=os.environ)
                 Task.objects.mark_start(self.pk, proc.pid)
                 buf = ''
                 t = time.time()

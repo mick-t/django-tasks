@@ -121,6 +121,12 @@ class TestModel(object):
         time.sleep(0.1)
         self._trigger("run_something_fast")
 
+    def check_database_settings(self):
+        from django.db import connection
+        print connection.settings_dict["NAME"]
+        time.sleep(0.1)
+        self._trigger("check_database_settings")
+
     def _trigger(self, event):
         open(self.pk + event, 'w').writelines(["."])
         
@@ -152,16 +158,21 @@ class ViewsTestCase(unittest.TestCase):
              ('run_something_with_two_required', "Run a task with two required task", 'run_something_long,run_something_with_required'),
              ('run_something_fast', "Run a fast task", ''),
              ('run_something_with_required_failing', "Run a task with a required task that fails", 'run_something_failing'),
+             ('check_database_settings', "Checks the database settings", ''),
              ]
         import tempfile
         self.tempdir = tempfile.mkdtemp()
-        
+        import os
+        os.environ['DJANGOTASKS_TESTING'] = "YES"
+
     def tearDown(self):
         del TaskManager.DEFINED_TASKS['djangotasks.tests.TestModel']
         for task in Task.objects.filter(model='djangotasks.tests.TestModel'):
             task.delete()
         import shutil
         shutil.rmtree(self.tempdir)
+        import os
+        del os.environ['DJANGOTASKS_TESTING']
 
     def test_tasks_import(self):
         from djangotasks.models import _my_import
@@ -238,6 +249,18 @@ class ViewsTestCase(unittest.TestCase):
                           , new_task.log)
         self.assertEquals("successful", new_task.status)
 
+    def test_tasks_run_check_database(self):
+        task = self._create_task(TestModel.check_database_settings, join(self.tempdir, 'key1'))
+        Task.objects.run_task(task.pk)
+        with StandardOutputCheck(self, "Starting task " + str(task.pk) + "... started.\n"):
+            Task.objects._do_schedule()
+        self._wait_until('key1', 'check_database_settings')
+        time.sleep(0.5)
+        new_task = Task.objects.get(pk=task.pk)
+        from django.db import connection
+        self.assertEquals(connection.settings_dict["NAME"] + u'\n' , new_task.log) # May fail if your Django settings define a different test database for each run: in which case you should modify it, to ensure it's always the same.
+        self.assertEquals("successful", new_task.status)
+
     def test_tasks_run_with_space_fast(self):
         task = self._create_task(TestModel.run_something_fast, join(self.tempdir, 'key with space'))
         Task.objects.run_task(task.pk)
@@ -299,7 +322,7 @@ class ViewsTestCase(unittest.TestCase):
     
     def test_tasks_get_tasks_for_object(self):
         tasks = Task.objects.tasks_for_object(TestModel, 'key2')
-        self.assertEquals(7, len(tasks))
+        self.assertEquals(8, len(tasks))
         self.assertEquals('defined', tasks[0].status)
         self.assertEquals('defined', tasks[1].status)
         self.assertEquals('run_something_long', tasks[0].method)
@@ -316,17 +339,6 @@ class ViewsTestCase(unittest.TestCase):
         task = Task.objects.task_for_object(TestModel, 'key-more', 'run_something_with_two_required')
         self.assertEquals('run_something_long,run_something_with_required', task.required_methods)
         
-    def test_tasks_revision(self):
-        task = Task.objects.task_for_object(TestModel, 'key2', 'run_something_long')
-        Task.objects.run_task(task.pk)
-        Task.objects.mark_start(task.pk, '12345')
-        task = Task.objects.task_for_object(TestModel, 'key2', 'run_something_long')
-        import settings
-        if exists(join(dirname(settings.__file__), '.svn')):
-            self.assertTrue(task.revision > 0)
-        else:
-            self.assertEquals(0, task.revision)
-
     def test_tasks_archive_task(self):
         tasks = Task.objects.tasks_for_object(TestModel, 'key3')
         task = tasks[0]
@@ -443,7 +455,7 @@ class ViewsTestCase(unittest.TestCase):
         self.assertEquals(new_task.pk, tasks[5].pk)
         
 
-    def test_tasks_exception_in_thread(self):
+    def NOtest_tasks_exception_in_thread(self):
         task = self._create_task(TestModel.run_something_long, join(self.tempdir, 'key1'))
         Task.objects.run_task(task.pk)
         task = self._create_task(TestModel.run_something_long, join(self.tempdir, 'key1'))

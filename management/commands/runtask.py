@@ -26,10 +26,28 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+import os
 from django.core.management.base import BaseCommand
 
 class Command(BaseCommand):
     def handle(self, model, object_id, method, *args, **options):
+        if 'DJANGOTASKS_TESTING' in os.environ:
+            # In tests, we make sure that we are using the right database connection
+            # This code is heavily inspired by BaseDatabaseCreation._create_test_db in django/db/backends/creation.py
+            # (why doesn't Django provides this as a public method ??)
+            from django.db import connections
+            for alias in connections:
+                connection = connections[alias]
+                connection.close()
+                if connection.settings_dict['TEST_NAME']:
+                    test_database_name = connection.settings_dict['TEST_NAME']
+                else:
+                    test_database_name = creation.TEST_DATABASE_PREFIX + connection.settings_dict['NAME']
+                    
+                connection.settings_dict["NAME"] = test_database_name
+                can_rollback = connection.creation._rollback_works()
+                connection.settings_dict["SUPPORTS_TRANSACTIONS"] = can_rollback
+
         from djangotasks.models import Task
         return Task.objects.exec_task(model, object_id, method)
         
