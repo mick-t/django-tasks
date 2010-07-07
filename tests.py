@@ -37,6 +37,9 @@ import time
 import inspect
 from os.path import join, dirname, basename, exists, join
 
+import re
+DATETIME_REGEX = re.compile('[a-zA-Z]+ \d+\, \d\d\d\d at \d+\:\d+ [ap]\.m\.')
+
 from models import Task, TaskManager
 
 class StandardOutputCheck(object):
@@ -392,9 +395,12 @@ class ViewsTestCase(unittest.TestCase):
         time.sleep(0.5)
         self._assert_status("successful", task)
         task = Task.objects.get(pk=task.pk)
-        self.assertEquals(u'Run a successful task - Successfully scanned:\n\nrunning something...\n' + 
-                          u'still running...\n\n\nRun a task with a required task - Successfully scanned:\n\n' +
-                          u'running required...\n\n', task.complete_log())
+        complete_log, _ = DATETIME_REGEX.subn('', task.complete_log())
+
+        self.assertEquals(u'Run a successful task started on \nrunning something...\nstill running...\n\n' +
+                          u'Run a successful task finished successfully on \n' + 
+                          u'Run a task with a required task started on \nrunning required...\n\n' + 
+                          u'Run a task with a required task finished successfully on ', complete_log)
 
     def test_tasks_run_required_task_failing(self):
         required_task = Task.objects.task_for_object(TestModel, join(self.tempdir, 'key1'), 'run_something_failing')
@@ -421,10 +427,13 @@ class ViewsTestCase(unittest.TestCase):
         time.sleep(0.5)
         self._assert_status("unsuccessful", task)
         task = Task.objects.get(pk=task.pk)
-        complete_log = task.complete_log()
-        self.assertTrue(complete_log.startswith('Run a failing task - Scan error:\n\nrunning, will fail...\nTraceback (most recent call last):'))
-        self.assertTrue(', in run_something_failing\n    raise Exception("Failed !")\nException: Failed !' in complete_log)
-        self.assertTrue(complete_log.endswith(u'Exception: Failed !\n\n\nRun a task with a required task that fails - Scan error: (no log)\n'))
+
+        complete_log, _ = DATETIME_REGEX.subn('', task.complete_log())
+        self.assertTrue(complete_log.startswith('Run a failing task started on \nrunning, will fail...\nTraceback (most recent call last):'))
+        self.assertTrue(complete_log.endswith(u', in run_something_failing\n    raise Exception("Failed !")\nException: Failed !\n\n' + 
+                                              u'Run a failing task finished with error on \n' + 
+                                              u'Run a task with a required task that fails started\n' + 
+                                              u'Run a task with a required task that fails finished with error'))
         self.assertEquals("unsuccessful", task.status)
 
     def test_tasks_run_again(self):

@@ -249,13 +249,13 @@ def _my_import(name):
     return mod
 
 
-STATUS_TABLE = [('defined', 'Ready for scan'),
-                ('scheduled', 'Scan scheduled'),
-                ('running', 'Scan in progress',),
-                ('requested_cancel', 'Scan cancelled'),
-                ('cancelled', 'Scan cancelled'),
-                ('successful', 'Successfully scanned'),
-                ('unsuccessful', 'Scan error'),
+STATUS_TABLE = [('defined', 'ready to run'),
+                ('scheduled', 'scheduled'),
+                ('running', 'in progress',),
+                ('requested_cancel', 'cancelled'),
+                ('cancelled', 'cancelled'),
+                ('successful', 'finished successfully'),
+                ('unsuccessful', 'finished with error'),
                 ]
 
           
@@ -284,18 +284,25 @@ class Task(models.Model):
         return u'%s - %s.%s.%s' % (self.id, self.model.split('.')[-1], self.object_id, self.method)
 
     def status_string(self):
-        '''
-        Display the status (probably a computed field based on tasks: 
-        "Scan scheduled", "Scan in progress"
-        '''
         return dict(STATUS_TABLE)[self.status]
 
     def complete_log(self):
         return '\n'.join([required_task.formatted_log() for required_task in self.get_required_tasks()] + [self.formatted_log()])
 
     def formatted_log(self):
-        return self.description + " - " + self.status_string() + ":" + (("\n\n" + self.log + "\n") if self.log else " (no log)\n")
-
+        from django.utils.dateformat import format
+        FORMAT = "N j, Y \\a\\t P"
+        if self.status in ['cancelled', 'successful', 'unsuccessful']:
+            return (self.description + ' started' + ((' on ' + format(self.start_date, FORMAT)) if self.start_date else '') +
+                    (("\n" + self.log) if self.log else "") + "\n" +
+                    self.description + ' ' + self.status_string() + ((' on ' + format(self.end_date, FORMAT)) if self.end_date else ''))
+        elif self.status in ['running', 'requested_cancel']:
+            return (self.description + ' started' + ((' on ' + format(self.start_date, FORMAT)) if self.start_date else '') +
+                    (("\n" + self.log) if self.log else "") + "\n" +
+                    self.description + ' ' + self.status_string())
+        else:
+            return self.description + ' ' +  self.status_string()
+                    
     # Only for use by the manager: do not call directly
     def do_run(self):
         if self.status != "scheduled":
