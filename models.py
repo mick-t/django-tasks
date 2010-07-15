@@ -142,8 +142,9 @@ class TaskManager(models.Manager):
     def append_log(self, pk, log):
         if log:
             try:
-                rowcount = connection.cursor().execute('UPDATE ' + Task._meta.db_table + ' SET log = log || %s WHERE id = %s', [log, pk]).rowcount
-                if rowcount == 0:
+                cursor = connection.cursor()
+                cursor.execute('UPDATE ' + Task._meta.db_table + ' SET log = log || %s WHERE id = %s', [log, pk])
+                if cursor.rowcount == 0:
                     raise Exception(("Failed to save log for task %d, task does not exist; log was:\n" % pk) + log)
             finally:
                 transaction.commit_unless_managed()
@@ -151,11 +152,12 @@ class TaskManager(models.Manager):
     def mark_start(self, pk, pid):
         # Set the start information in all cases...
         try:
-            rowcount = connection.cursor().execute('UPDATE ' + Task._meta.db_table + ' SET start_date = %s, pid = %s WHERE id = %s', 
-                                                   [datetime.now(),
-                                                    pid, 
-                                                    pk]).rowcount
-            if rowcount == 0:
+            cursor = connection.cursor()
+            cursor.execute('UPDATE ' + Task._meta.db_table + ' SET start_date = %s, pid = %s WHERE id = %s', 
+                           [datetime.now(),
+                            pid, 
+                            pk])
+            if cursor.rowcount == 0:
                 raise Exception("Failed to mark task with ID %d as started, task does not exist" % pk)
         finally:
             transaction.commit_unless_managed()
@@ -169,10 +171,11 @@ class TaskManager(models.Manager):
             if isinstance(existing_status, str):
                 existing_status = [ existing_status ]
                 
-            rowcount = connection.cursor().execute('UPDATE ' + Task._meta.db_table + ' SET status = %s WHERE id = %s AND status IN ' 
-                                                   "(" + ", ".join(["%s"] * len(existing_status)) + ")",
-                                                   [new_status, pk] + existing_status).rowcount
-            if rowcount == 0:
+            cursor = connection.cursor()
+            cursor.execute('UPDATE ' + Task._meta.db_table + ' SET status = %s WHERE id = %s AND status IN ' 
+                           "(" + ", ".join(["%s"] * len(existing_status)) + ")",
+                           [new_status, pk] + existing_status)
+            if cursor.rowcount == 0:
                 print 'WARNING: failed to change status from %s to "%s" for task %s' % ("or".join('"' + status + '"' for status in existing_status), new_status, pk)
         finally:
             transaction.commit_unless_managed()
@@ -180,11 +183,12 @@ class TaskManager(models.Manager):
 
     def mark_finished(self, pk, new_status, existing_status):
         try:
-            rowcount = connection.cursor().execute('UPDATE ' + Task._meta.db_table + ' SET status = %s, end_date = %s WHERE id = %s AND status = %s', 
+            cursor = connection.cursor()
+            cursor.execute('UPDATE ' + Task._meta.db_table + ' SET status = %s, end_date = %s WHERE id = %s AND status = %s', 
                                                    [new_status, 
                                                     datetime.now(),
-                                                    pk, existing_status]).rowcount
-            if rowcount == 0:
+                                                    pk, existing_status])
+            if cursor.rowcount == 0:
                 print 'INFO: failed to mark tasked as finished, from status "%s" to "%s" for task %s. May have been finished in a different thread already.' % (existing_status, new_status, pk)
         finally:
             transaction.commit_unless_managed()

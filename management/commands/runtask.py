@@ -42,7 +42,8 @@ class Command(BaseCommand):
                 if connection.settings_dict['TEST_NAME']:
                     test_database_name = connection.settings_dict['TEST_NAME']
                 else:
-                    test_database_name = creation.TEST_DATABASE_PREFIX + connection.settings_dict['NAME']
+                    from django.db.backends.creation import TEST_DATABASE_PREFIX
+                    test_database_name = TEST_DATABASE_PREFIX + connection.settings_dict['NAME']
                     
                 connection.settings_dict["NAME"] = test_database_name
                 can_rollback = connection.creation._rollback_works()
