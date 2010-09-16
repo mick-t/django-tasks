@@ -177,6 +177,14 @@ class ViewsTestCase(unittest.TestCase):
         import os
         del os.environ['DJANGOTASKS_TESTING']
 
+    #  This may be needed for databases that can't share transactions (connections) accross threads (sqlite in particular):
+    #  the tests tasks may need to be commited before the execution thread is started, which require transaction.commit to actually *do* the commit --
+    #  and the original "_fixture_setup" causes "transaction.commit" to be transformed into a "nop" !!!
+    #def _fixture_setup(self):
+    #    pass
+    #def _fixture_teardown(self):
+    #    pass
+
     def test_tasks_import(self):
         from djangotasks.models import _my_import
         self.assertEquals(TestModel, _my_import('djangotasks.tests.TestModel'))
@@ -226,12 +234,12 @@ class ViewsTestCase(unittest.TestCase):
             del TaskManager.DEFINED_TASKS['djangotasks.tests.MyClass']
 
     def _wait_until(self, key, event):
-        max = 50 # 5 seconds max
+        max = 100 # 10 seconds; on slow, loaded, Mac machines, a lower value doesn't seem to be enough
         while not exists(join(self.tempdir, key + event)) and max:
             time.sleep(0.1)
             max -= 1
         if not max:
-            self.fail("Timeout")
+            self.fail("Timeout on key=%s, event=%s" % (key, event))
         
     def _reset(self, key, event):
         os.remove(join(self.tempdir, key + event))
