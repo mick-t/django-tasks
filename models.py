@@ -299,7 +299,8 @@ class Task(models.Model):
         if self.status in ['cancelled', 'successful', 'unsuccessful']:
             return (self.description + ' started' + ((' on ' + format(self.start_date, FORMAT)) if self.start_date else '') +
                     (("\n" + self.log) if self.log else "") + "\n" +
-                    self.description + ' ' + self.status_string() + ((' on ' + format(self.end_date, FORMAT)) if self.end_date else ''))
+                    self.description + ' ' + self.status_string() + ((' on ' + format(self.end_date, FORMAT)) if self.end_date else '') +
+                    (' (%s)' % self.duration if self.duration else ''))
         elif self.status in ['running', 'requested_cancel']:
             return (self.description + ' started' + ((' on ' + format(self.start_date, FORMAT)) if self.start_date else '') +
                     (("\n" + self.log) if self.log else "") + "\n" +
@@ -413,6 +414,12 @@ class Task(models.Model):
 
     def can_run(self):
         return self.status not in ["scheduled", "running", "requested_cancel", ] #"successful"
+
+    def _compute_duration(self):
+        if self.start_date and self.end_date:
+            return (self.end_date - self.start_date).__str__()
+
+    duration = property(_compute_duration)
             
     objects = TaskManager()
 
