@@ -35,34 +35,39 @@ import unittest
 import tempfile
 import time
 import inspect
+import logging
 from os.path import join, dirname, basename, exists, join
 
 import re
 DATETIME_REGEX = re.compile('([a-zA-Z]+[.]? \d+\, \d\d\d\d at \d+(\:\d+)? [ap]\.m\.)|( \(\d+:\d+:\d+.\d+\))')
 
-from models import Task, TaskManager
+from models import Task, TaskManager, LOG
 
-class StandardOutputCheck(object):
-    def __init__(self, test, expected_stdout = None, fail_if_different=True):
+class LogCheck(object):
+    def __init__(self, test, expected_log = None, fail_if_different=True):
         self.test = test
-        self.expected_stdout = expected_stdout or ''
+        self.expected_log = expected_log or ''
         self.fail_if_different = fail_if_different
         
     def __enter__(self):
-        self.stdout = sys.stdout
-        sys.stdout = StringIO.StringIO()
+        self.loghandlers = LOG.handlers
+        LOG.handlers = []
+        self.log = StringIO.StringIO()
+        test_handler = logging.StreamHandler(self.log)
+        test_handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
+        LOG.addHandler(test_handler)
         
     def __exit__(self, type, value, traceback):
         # Restore state
-        self.stdoutvalue = sys.stdout.getvalue()
-        sys.stdout = self.stdout
+        self.loghandlers = LOG.handlers
 
         # Check the output only if no exception occured (to avoid "eating" test failures)
         if type:
             return
         
         if self.fail_if_different:
-            self.test.assertEquals(self.expected_stdout, self.stdoutvalue)
+            self.test.assertEquals(self.expected_log, self.log.getvalue())
+
 
 class TestModel(object):
     ''' A mock Model object for task tests'''
@@ -132,7 +137,10 @@ class TestModel(object):
 
     def _trigger(self, event):
         open(self.pk + event, 'w').writelines(["."])
-        
+
+def _start_message(task):
+    return "INFO: Starting task " + str(task.pk) + "...\nINFO: ...Task " + str(task.pk) + " started.\n" 
+    
 class ViewsTestCase(unittest.TestCase):
     def failUnlessRaises(self, excClassOrInstance, callableObj, *args, **kwargs):
         # improved method compared to unittest.TestCase.failUnlessRaises:
@@ -251,7 +259,7 @@ class ViewsTestCase(unittest.TestCase):
     def test_tasks_run_successful(self):
         task = self._create_task(TestModel.run_something_long, join(self.tempdir, 'key1'))
         Task.objects.run_task(task.pk)
-        with StandardOutputCheck(self, "Starting task " + str(task.pk) + "... started.\n"):
+        with LogCheck(self, _start_message(task)):
             Task.objects._do_schedule()
         self._wait_until('key1', 'run_something_long_2')
         time.sleep(0.5)
@@ -263,7 +271,7 @@ class ViewsTestCase(unittest.TestCase):
     def test_tasks_run_check_database(self):
         task = self._create_task(TestModel.check_database_settings, join(self.tempdir, 'key1'))
         Task.objects.run_task(task.pk)
-        with StandardOutputCheck(self, "Starting task " + str(task.pk) + "... started.\n"):
+        with LogCheck(self, _start_message(task)):
             Task.objects._do_schedule()
         self._wait_until('key1', 'check_database_settings')
         time.sleep(0.5)
@@ -275,7 +283,7 @@ class ViewsTestCase(unittest.TestCase):
     def test_tasks_run_with_space_fast(self):
         task = self._create_task(TestModel.run_something_fast, join(self.tempdir, 'key with space'))
         Task.objects.run_task(task.pk)
-        with StandardOutputCheck(self, "Starting task " + str(task.pk) + "... started.\n"):
+        with LogCheck(self, _start_message(task)):
             Task.objects._do_schedule()
         self._wait_until('key with space', "run_something_fast")
         time.sleep(0.5)
@@ -287,18 +295,18 @@ class ViewsTestCase(unittest.TestCase):
     def test_tasks_run_cancel_running(self):
         task = self._create_task(TestModel.run_something_long, join(self.tempdir, 'key1'))
         Task.objects.run_task(task.pk)
-        with StandardOutputCheck(self, "Starting task " + str(task.pk) + "... started.\n"):
+        with LogCheck(self, _start_message(task)):
             Task.objects._do_schedule()
         self._wait_until('key1', "run_something_long_1")
         Task.objects.cancel_task(task.pk)
-        output_check = StandardOutputCheck(self, fail_if_different=False)
+        output_check = LogCheck(self, fail_if_different=False)
         with output_check:
             Task.objects._do_schedule()
             time.sleep(0.3)
-        self.assertTrue(("Cancelling task " + str(task.pk) + "...") in output_check.stdoutvalue)
-        self.assertTrue("cancelled.\n" in output_check.stdoutvalue)
+        self.assertTrue(("Cancelling task " + str(task.pk) + "...") in output_check.log.getvalue())
+        self.assertTrue("cancelled.\n" in output_check.log.getvalue())
         #self.assertTrue('INFO: failed to mark tasked as finished, from status "running" to "unsuccessful" for task 3. May have been finished in a different thread already.\n'
-        #                in output_check.stdoutvalue)
+        #                in output_check.log.getvalue())
 
         new_task = Task.objects.get(pk=task.pk)
         self.assertEquals("cancelled", new_task.status)
@@ -308,11 +316,11 @@ class ViewsTestCase(unittest.TestCase):
 
     def test_tasks_run_cancel_scheduled(self):
         task = self._create_task(TestModel.run_something_long, join(self.tempdir, 'key1'))
-        with StandardOutputCheck(self):
+        with LogCheck(self):
             Task.objects._do_schedule()
         Task.objects.run_task(task.pk)
         Task.objects.cancel_task(task.pk)
-        with StandardOutputCheck(self, "Cancelling task " + str(task.pk) + "... cancelled.\n"):
+        with LogCheck(self, "INFO: Cancelling task " + str(task.pk) + "...\nINFO: Task " + str(task.pk) + " finished with status \"cancelled\"\nINFO: ...Task 1 cancelled.\n"):
             Task.objects._do_schedule()
         new_task = Task.objects.get(pk=task.pk)
         self.assertEquals("cancelled", new_task.status)            
@@ -321,7 +329,7 @@ class ViewsTestCase(unittest.TestCase):
     def test_tasks_run_failing(self):
         task = self._create_task(TestModel.run_something_failing, join(self.tempdir, 'key1'))
         Task.objects.run_task(task.pk)
-        with StandardOutputCheck(self, "Starting task " + str(task.pk) + "... started.\n"):
+        with LogCheck(self, _start_message(task)):
             Task.objects._do_schedule()
         self._wait_until('key1', "run_something_failing")
         time.sleep(0.5)
@@ -383,7 +391,7 @@ class ViewsTestCase(unittest.TestCase):
         self._assert_status("scheduled", task)
         self._assert_status("scheduled", required_task)
 
-        with StandardOutputCheck(self, "Starting task " + str(required_task.pk) + "... started.\n"):
+        with LogCheck(self, _start_message(required_task)):
             Task.objects._do_schedule()
         time.sleep(0.5)
         self._assert_status("scheduled", task)
@@ -394,7 +402,7 @@ class ViewsTestCase(unittest.TestCase):
         self._assert_status("scheduled", task)
         self._assert_status("successful", required_task)
 
-        with StandardOutputCheck(self, "Starting task " + str(task.pk) + "... started.\n"):
+        with LogCheck(self, _start_message(task)):
             Task.objects._do_schedule()
         time.sleep(0.5)
         self._assert_status("running", task)
@@ -419,7 +427,7 @@ class ViewsTestCase(unittest.TestCase):
         self._assert_status("scheduled", task)
         self._assert_status("scheduled", required_task)
 
-        with StandardOutputCheck(self, "Starting task " + str(required_task.pk) + "... started.\n"):
+        with LogCheck(self, _start_message(required_task)):
             Task.objects._do_schedule()
         time.sleep(0.5)
         self._assert_status("scheduled", task)
@@ -430,7 +438,7 @@ class ViewsTestCase(unittest.TestCase):
         self._assert_status("scheduled", task)
         self._assert_status("unsuccessful", required_task)
 
-        with StandardOutputCheck(self):
+        with LogCheck(self):
             Task.objects._do_schedule()
         time.sleep(0.5)
         self._assert_status("unsuccessful", task)
@@ -449,23 +457,23 @@ class ViewsTestCase(unittest.TestCase):
         task = tasks[5]
         self.assertEquals('run_something_fast', task.method)
         Task.objects.run_task(task.pk)
-        with StandardOutputCheck(self, "Starting task " + str(task.pk) + "... started.\n"):
+        with LogCheck(self, _start_message(task)):
             Task.objects._do_schedule()
         self._wait_until('key1', "run_something_fast")
         time.sleep(0.5)
         self._reset('key1', "run_something_fast")
         self._assert_status("successful", task)
         Task.objects.run_task(task.pk)
-        output_check = StandardOutputCheck(self, fail_if_different=False)
+        output_check = LogCheck(self, fail_if_different=False)
         with output_check:
             Task.objects._do_schedule()
         self._wait_until('key1', "run_something_fast")
         time.sleep(0.5)
         import re
-        pks = re.findall(r'(\d+)', output_check.stdoutvalue)
-        self.assertEquals(1, len(pks))
-        self.assertEquals("Starting task " + pks[0] + "... started.\n", output_check.stdoutvalue)
+        pks = re.findall(r'(\d+)', output_check.log.getvalue())
         new_task = Task.objects.get(pk=int(pks[0]))
+        self.assertEquals(_start_message(new_task) + 'INFO: Task ' + str(new_task.pk) + ' finished with status "successful"\n', 
+                          output_check.log.getvalue())
         self.assertTrue(new_task.pk != task.pk)
         self.assertEquals("successful", new_task.status)
         tasks = Task.objects.tasks_for_object(TestModel, join(self.tempdir, 'key1'))
@@ -484,10 +492,10 @@ class ViewsTestCase(unittest.TestCase):
         except Exception, e:
             self.assertEquals("Task matching query does not exist.", str(e))
             
-        output_check = StandardOutputCheck(self, fail_if_different=False)
+        output_check = LogCheck(self, fail_if_different=False)
         with output_check:
             task.do_run()
             time.sleep(0.5)
-        self.assertTrue("Exception: Failed to mark task with " in output_check.stdoutvalue)
-        self.assertTrue("as started, task does not exist" in output_check.stdoutvalue)
-        self.assertTrue('INFO: failed to mark tasked as finished, from status "running" to "unsuccessful" for task' in output_check.stdoutvalue)
+        self.assertTrue("Exception: Failed to mark task with " in output_check.log.getvalue())
+        self.assertTrue("as started, task does not exist" in output_check.log.getvalue())
+        self.assertTrue('INFO: failed to mark tasked as finished, from status "running" to "unsuccessful" for task' in output_check.log.getvalue())

@@ -255,7 +255,7 @@ class TaskManager(models.Manager):
                    for required_task in task.get_required_tasks()):
                 LOG.info("Starting task %s...", task.pk)
                 task.do_run()
-                LOG.info("... task %s started.", task.pk)
+                LOG.info("...Task %s started.", task.pk)
                 # only start one task at a time
                 break
                 
@@ -270,7 +270,7 @@ def _my_import(name):
 STATUS_TABLE = [('defined', 'ready to run'),
                 ('scheduled', 'scheduled'),
                 ('running', 'in progress',),
-                ('requested_cancel', 'cancelled'),
+                ('requested_cancel', 'cancellation requested'),
                 ('cancelled', 'cancelled'),
                 ('successful', 'finished successfully'),
                 ('unsuccessful', 'finished with error'),
