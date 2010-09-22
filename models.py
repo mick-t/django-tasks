@@ -31,12 +31,19 @@ import time
 import sys
 import time
 import subprocess
+import logging
+
 
 from django.db import models
 from datetime import datetime
 from os.path import join, exists, dirname, abspath
 from collections import defaultdict
 from django.db import transaction, connection
+
+
+LOG = logging.getLogger("djangotasks")
+LOG.addHandler(logging.StreamHandler())
+LOG.setLevel(logging.INFO)
 
 def _qualified_class_name(the_class):
     import inspect
@@ -85,8 +92,10 @@ class TaskManager(models.Manager):
         else:
             if task.required_methods != taskdef[2]:
                 # not much we can do, since we are unsure which one is the most recent - the code or the DB
-                print 'WARNING: the required methods for task "%s.%s" have changed. You must delete the old tasks manually in the database, and restart the task daemon' % (model, method)
+                LOG.warning('The required methods for task "%s.%s" have changed. You must delete the old tasks manually in the database, and restart the task daemon',
+                            model, method)
 
+        LOG.debug("Created task %d on model=%s, method=%s, object_id=%s", task.id, model, method, object_id)
         return task
 
     def tasks_for_object(self, the_class, object_id):
@@ -176,7 +185,8 @@ class TaskManager(models.Manager):
                            "(" + ", ".join(["%s"] * len(existing_status)) + ")",
                            [new_status, pk] + existing_status)
             if cursor.rowcount == 0:
-                print 'WARNING: failed to change status from %s to "%s" for task %s' % ("or".join('"' + status + '"' for status in existing_status), new_status, pk)
+                LOG.warning('Failed to change status from %s to "%s" for task %s',
+                            "or".join('"' + status + '"' for status in existing_status), new_status, pk)
         finally:
             transaction.commit_unless_managed()
 
@@ -189,7 +199,11 @@ class TaskManager(models.Manager):
                                                     datetime.now(),
                                                     pk, existing_status])
             if cursor.rowcount == 0:
-                print 'INFO: failed to mark tasked as finished, from status "%s" to "%s" for task %s. May have been finished in a different thread already.' % (existing_status, new_status, pk)
+               LOG.warning('Failed to mark tasked as finished, from status "%s" to "%s" for task %s. May have been finished in a different thread already.',
+                           existing_status, new_status, pk)
+            else:
+               LOG.info('Task %s finished with status "%s"', pk, new_status)
+                
         finally:
             transaction.commit_unless_managed()
 
@@ -208,12 +222,12 @@ class TaskManager(models.Manager):
     
     # This is for use in the scheduler only. Don't use it directly
     def scheduler(self):
-        print "Starting scheduler..."
+        LOG.info("Starting scheduler...")
         while True:
             try:
                 self._do_schedule()
-            except Exception, e:
-                print "Scheduler exception: " + str(e)
+            except:
+                LOG.exception("Scheduler exception")
             # Loop time must be enough to let the threads that may have be started call mark_start
             time.sleep(5)
 
@@ -222,9 +236,9 @@ class TaskManager(models.Manager):
         tasks = self.filter(status="requested_cancel",
                             archived=False)
         for task in tasks:
-            print "Cancelling task %d..." % task.pk, 
+            LOG.info("Cancelling task %d...", task.pk)
             task.do_cancel()
-            print "cancelled."
+            LOG.info("...Task %d cancelled.", task.pk)
 
         # ... Then start any new task
         tasks = self.filter(status="scheduled",
@@ -239,9 +253,9 @@ class TaskManager(models.Manager):
 
             if all(required_task.status == "successful"
                    for required_task in task.get_required_tasks()):
-                print "Starting task %s..." % task.pk, 
+                LOG.info("Starting task %s...", task.pk)
                 task.do_run()
-                print "started."
+                LOG.info("... task %s started.", task.pk)
                 # only start one task at a time
                 break
                 
@@ -333,6 +347,7 @@ class Task(models.Model):
                 while proc.poll() is None:
                     line = proc.stdout.readline()
                     buf += line
+
                     if (time.time() - t > 1): # Save the log once every second max
                         Task.objects.append_log(self.pk, buf)
                         buf = ''
@@ -350,15 +365,13 @@ class Task(models.Model):
 
                 returncode = proc.returncode
             except Exception, e:
+                LOG.exception("Exception in calling thread for task %s", self.pk)
                 import traceback
                 stack = traceback.format_exc()
                 try:
                     Task.objects.append_log(self.pk, "Exception in calling thread: " + str(e) + "\n" + stack)
                 except Exception, ee:
-                    print "Exception in calling thread: " + str(e)
-                    print stack
-                    # if we can't log it, raise it
-                    #raise e
+                    LOG.exception("Second exception while trying to save the first exception to the log for task %s!", self.pk)
 
             Task.objects.mark_finished(self.pk,
                                        "successful" if returncode == 0 else "unsuccessful",
