@@ -304,6 +304,13 @@ class Task(models.Model):
     def status_string(self):
         return dict(STATUS_TABLE)[self.status]
 
+    def status_for_display(self):
+        return '<span class="%s">%s</span>' % (self.status, self.status_string())
+
+    status_for_display.allow_tags = True
+    status_for_display.admin_order_field = 'status'
+    status_for_display.short_description = 'Status'
+
     def complete_log(self):
         return '\n'.join([required_task.formatted_log() for required_task in self.get_required_tasks()] + [self.formatted_log()])
 
