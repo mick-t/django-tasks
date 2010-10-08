@@ -159,7 +159,8 @@ class TaskManager(models.Manager):
                 transaction.commit_unless_managed()
 
     def mark_start(self, pk, pid):
-        # Set the start information in all cases...
+        # Set the start information in all cases: That way, if it has been set
+        # to "requested_cancel" already, it will be cancelled at the next loop of the scheduler
         try:
             cursor = connection.cursor()
             cursor.execute('UPDATE ' + Task._meta.db_table + ' SET start_date = %s, pid = %s WHERE id = %s', 
@@ -170,10 +171,6 @@ class TaskManager(models.Manager):
                 raise Exception("Failed to mark task with ID %d as started, task does not exist" % pk)
         finally:
             transaction.commit_unless_managed()
-
-        # ... but mark as running only if it is currently "scheduled".
-        # That way, if it has been set to "requested_cancel" already, it will be cancelled at the next loop of the scheduler
-        self._set_status(pk, "running", "scheduled")
 
     def _set_status(self, pk, new_status, existing_status):
         try:
@@ -187,9 +184,11 @@ class TaskManager(models.Manager):
             if cursor.rowcount == 0:
                 LOG.warning('Failed to change status from %s to "%s" for task %s',
                             "or".join('"' + status + '"' for status in existing_status), new_status, pk)
+
+            return cursor.rowcount != 0
         finally:
             transaction.commit_unless_managed()
-
+            
 
     def mark_finished(self, pk, new_status, existing_status):
         try:
@@ -345,6 +344,11 @@ class Task(models.Model):
             returncode = -1
             try:
                 import manage
+                # Do not start if it's not marked as scheduled
+                # This ensures that we can have multiple schedulers
+                if not Task.objects._set_status(self.pk, "running", "scheduled"):
+                    return
+
                 proc = subprocess.Popen([sys.executable, 
                                          manage.__file__, 
                                          'runtask', 
@@ -456,5 +460,10 @@ class Task(models.Model):
 
 from django.conf import settings
 if 'DJANGOTASK_DAEMON_THREAD' in dir(settings) and settings.DJANGOTASK_DAEMON_THREAD:
+# TODO
+# or ('DJANGOTASKS_USE_THREAD_DAEMON' in os.environ)
+#if 'DJANGOTASKS_USE_THREAD_DAEMON' in os.environ:
+#    # make sure we run it only once
+#    del os.environ['DJANGOTASKS_USE_THREAD_DAEMON']
     import thread
     thread.start_new_thread(Task.objects.scheduler, ())
