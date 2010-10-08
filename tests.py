@@ -39,7 +39,7 @@ import logging
 from os.path import join, dirname, basename, exists, join
 
 import re
-DATETIME_REGEX = re.compile('([a-zA-Z]+[.]? \d+\, \d\d\d\d at \d+(\:\d+)? [ap]\.m\.)|( \(\d+:\d+:\d+.\d+\))')
+DATETIME_REGEX = re.compile('([a-zA-Z]+[.]? \d+\, \d\d\d\d at \d+(\:\d+)? [ap]\.m\.)|( \(\d+ minute(s)? \d+ second(s)?\))')
 
 from models import Task, TaskManager, LOG
 
