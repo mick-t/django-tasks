@@ -27,10 +27,16 @@
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import os
+import sys
 from django.core.management.base import BaseCommand
 
 class Command(BaseCommand):
-    def handle(self, model, object_id, method, *args, **options):
+    args = "model method object_id"
+    
+    def handle(self, *args, **options):
+        if len(args) != 3:
+            self.print_help(sys.argv[0], sys.argv[1])
+            return
         if 'DJANGOTASKS_TESTING' in os.environ:
             # In tests, we make sure that we are using the right database connection
             # This code is heavily inspired by BaseDatabaseCreation._create_test_db in django/db/backends/creation.py
@@ -50,5 +56,5 @@ class Command(BaseCommand):
                 connection.settings_dict["SUPPORTS_TRANSACTIONS"] = can_rollback
 
         from djangotasks.models import Task
-        return Task.objects.exec_task(model, object_id, method)
+        return Task.objects.exec_task(*args)
         

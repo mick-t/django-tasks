@@ -208,7 +208,7 @@ class TaskManager(models.Manager):
             transaction.commit_unless_managed()
 
     # This is for use on the server. Don't use it directly.
-    def exec_task(self, model, object_id, method):
+    def exec_task(self, model, method, object_id):
         try:
             the_class = _my_import(model)
             object = the_class.objects.get(pk=object_id)
@@ -223,13 +223,20 @@ class TaskManager(models.Manager):
     # This is for use in the scheduler only. Don't use it directly
     def scheduler(self):
         LOG.info("Starting scheduler...")
+        # Run once to ensure exiting if something is wrong
+        try:
+            self._do_schedule()
+        except:
+            LOG.exception("Failed to start scheduler due to exception")
+            return
+
         while True:
+            # Loop time must be enough to let the threads that may have be started call mark_start
+            time.sleep(5)
             try:
                 self._do_schedule()
             except:
                 LOG.exception("Scheduler exception")
-            # Loop time must be enough to let the threads that may have be started call mark_start
-            time.sleep(5)
 
     def _do_schedule(self):
         # First cancel any task that needs to be cancelled...
@@ -342,8 +349,9 @@ class Task(models.Model):
                                          manage.__file__, 
                                          'runtask', 
                                          self.model, 
+                                         self.method,
                                          self.object_id, 
-                                         self.method],
+                                         ],
                                         stdout=subprocess.PIPE,
                                         stderr=subprocess.STDOUT,
                                         close_fds=True, 
