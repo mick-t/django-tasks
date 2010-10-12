@@ -451,8 +451,10 @@ class Task(models.Model):
         if self.start_date and self.end_date:
             delta = self.end_date - self.start_date
             min, sec = divmod((delta.days * 86400) + delta.seconds, 60)
-            return '%d minute%s %d second%s' % \
-                    (min, 's' if min > 1 else '', sec, 's' if sec > 1 else '')
+            hour, min = divmod(min, 60)
+            str = ((hour, 'hour'), (min, 'minute'), (sec, 'second'))
+            return ', '.join(['%d %s%s' % (x[0], x[1],'s' if x[0] > 1 else '')
+                              for x in str if (x[0] > 0)])
 
     duration = property(_compute_duration)
             

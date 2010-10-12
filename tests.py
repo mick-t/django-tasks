@@ -39,7 +39,7 @@ import logging
 from os.path import join, dirname, basename, exists, join
 
 import re
-DATETIME_REGEX = re.compile('([a-zA-Z]+[.]? \d+\, \d\d\d\d at \d+(\:\d+)? [ap]\.m\.)|( \(\d+ minute(s)? \d+ second(s)?\))')
+DATETIME_REGEX = re.compile('([a-zA-Z]+[.]? \d+\, \d\d\d\d at \d+(\:\d+)? [ap]\.m\.)|( \((\d+ hour(s)?(, )?)?(\d+ minute(s)?(, )?)?(\d+ second(s)?(, )?)?\))')
 
 from models import Task, TaskManager, LOG
 
@@ -499,3 +499,16 @@ class ViewsTestCase(unittest.TestCase):
         self.assertTrue("Exception: Failed to mark task with " in output_check.log.getvalue())
         self.assertTrue("as started, task does not exist" in output_check.log.getvalue())
         self.assertTrue('INFO: failed to mark tasked as finished, from status "running" to "unsuccessful" for task' in output_check.log.getvalue())
+
+    def test_compute_duration(self):
+        from datetime import datetime
+        task = Task.objects.tasks_for_object(TestModel, 'key1')[0]
+        task.start_date = datetime(2010, 10, 7, 14, 22, 17, 848801)
+        task.end_date = datetime(2010, 10, 7, 17, 23, 43, 933740)
+        self.assertEquals('3 hours, 1 minute, 26 seconds', task.duration)
+        task.end_date = datetime(2010, 10, 7, 15, 12, 18, 933740)
+        self.assertEquals('50 minutes, 1 second', task.duration)
+        task.end_date = datetime(2010, 10, 7, 15, 22, 49, 933740)
+        self.assertEquals('1 hour, 32 seconds', task.duration)
+        task.end_date = datetime(2010, 10, 7, 14, 22, 55, 933740)
+        self.assertEquals('38 seconds', task.duration)
