@@ -28,6 +28,8 @@
 
 import os
 import sys
+import logging
+
 from django.core.management.base import BaseCommand
 
 class Command(BaseCommand):
@@ -37,6 +39,7 @@ class Command(BaseCommand):
         if len(args) != 3:
             self.print_help(sys.argv[0], sys.argv[1])
             return
+
         if 'DJANGOTASKS_TESTING' in os.environ:
             # In tests, we make sure that we are using the right database connection
             # This code is heavily inspired by BaseDatabaseCreation._create_test_db in django/db/backends/creation.py
@@ -55,6 +58,11 @@ class Command(BaseCommand):
                 can_rollback = connection.creation._rollback_works()
                 connection.settings_dict["SUPPORTS_TRANSACTIONS"] = can_rollback
 
-        from djangotasks.models import Task
+        from djangotasks.models import Task, LOG
+        # Ensure that task log messages will be sent to the standard output
+        # thus caught in the task's log
+        LOG.addHandler(logging.StreamHandler())
+        LOG.setLevel(logging.INFO)
+
         return Task.objects.exec_task(*args)
         

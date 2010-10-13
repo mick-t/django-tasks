@@ -42,8 +42,6 @@ from django.db import transaction, connection
 
 
 LOG = logging.getLogger("djangotasks")
-LOG.addHandler(logging.StreamHandler())
-LOG.setLevel(logging.INFO)
 
 def _qualified_class_name(the_class):
     import inspect
@@ -206,7 +204,7 @@ class TaskManager(models.Manager):
         finally:
             transaction.commit_unless_managed()
 
-    # This is for use on the server. Don't use it directly.
+    # This is for use in the scheduler only. Don't use it directly.
     def exec_task(self, model, method, object_id):
         try:
             the_class = _my_import(model)
@@ -221,14 +219,14 @@ class TaskManager(models.Manager):
     
     # This is for use in the scheduler only. Don't use it directly
     def scheduler(self):
-        LOG.info("Starting scheduler...")
         # Run once to ensure exiting if something is wrong
         try:
             self._do_schedule()
         except:
-            LOG.exception("Failed to start scheduler due to exception")
+            LOG.fatal("Failed to start scheduler due to exception", exc_info=1)
             return
 
+        LOG.info("Scheduler started")
         while True:
             # Loop time must be enough to let the threads that may have be started call mark_start
             time.sleep(5)
