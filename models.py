@@ -56,9 +56,14 @@ def register_task(method, documentation, *required_methods):
     if not inspect.ismethod(method):
         raise Exception(repr(method) + "is not a class method")
     model = _qualified_class_name(method.im_class)
+    if len(required_methods) == 1 and required_methods[0].__class__ in [list, tuple]:
+        required_methods = required_methods[0]
+
     for required_method in required_methods:
         if not inspect.ismethod(required_method):
-            raise Exception(repr(required_method) + "is not a class method")
+            raise Exception(repr(required_method) + " is not a class method")
+        if required_method.im_func.__name__ not in [method_name for method_name, _, _ in TaskManager.DEFINED_TASKS[model]]:
+            raise Exception(repr(required_method) + " is not registered as a task method for model " + model)
             
     TaskManager.DEFINED_TASKS[model].append((method.im_func.__name__, 
                                              documentation if documentation else '',
@@ -85,13 +90,7 @@ class TaskManager(models.Manager):
                                            archived=False)
         if created:
             task.description = taskdef[1]
-            task.required_methods = taskdef[2]
             task.save()
-        else:
-            if task.required_methods != taskdef[2]:
-                # not much we can do, since we are unsure which one is the most recent - the code or the DB
-                LOG.warning('The required methods for task "%s.%s" have changed. You must delete the old tasks manually in the database, and restart the task daemon',
-                            model, method)
 
         LOG.debug("Created task %d on model=%s, method=%s, object_id=%s", task.id, model, method, object_id)
         return task
@@ -300,7 +299,6 @@ class Task(models.Model):
     log = models.TextField(default='', null=True, blank=True)
 
     archived = models.BooleanField(default=False) # for history
-    required_methods = models.CharField(max_length=200, default='', null=True, blank=True)  # comma-separated list of the required methods
 
     def __unicode__(self):
         return u'%s - %s.%s.%s' % (self.id, self.model.split('.')[-1], self.object_id, self.method)
@@ -433,9 +431,20 @@ class Task(models.Model):
 
         super(Task, self).save(*args, **kwargs)
 
+    def _get_task_definition(self):
+        if self.model not in TaskManager.DEFINED_TASKS:
+            LOG.warning("A task on model=%s exists in the database, but is not defined in the code", self.model)
+            return None
+        taskdefs = [taskdef for taskdef in TaskManager.DEFINED_TASKS[self.model] if taskdef[0] == self.method]
+        if len(taskdefs) == 0:
+            LOG.debug("A task on model=%s and method=%s exists in the database, but is not defined in the code", self.model, self.method)
+            return None
+        return taskdefs[0]
+
     def get_required_tasks(self):
+        taskdef = self._get_task_definition()
         return [Task.objects.task_for_object(_my_import(self.model), self.object_id, method)
-                for method in self.required_methods.split(',') if method]
+                for method in taskdef[2].split(',') if method] if taskdef else []
     
     def find_method(self):
         the_class = _my_import(self.model)
@@ -460,10 +469,5 @@ class Task(models.Model):
 
 from django.conf import settings
 if 'DJANGOTASK_DAEMON_THREAD' in dir(settings) and settings.DJANGOTASK_DAEMON_THREAD:
-# TODO
-# or ('DJANGOTASKS_USE_THREAD_DAEMON' in os.environ)
-#if 'DJANGOTASKS_USE_THREAD_DAEMON' in os.environ:
-#    # make sure we run it only once
-#    del os.environ['DJANGOTASKS_USE_THREAD_DAEMON']
     import thread
     thread.start_new_thread(Task.objects.scheduler, ())

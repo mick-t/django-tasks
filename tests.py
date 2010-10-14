@@ -228,15 +228,25 @@ class ViewsTestCase(unittest.TestCase):
             def mymethod3(self):
                 pass
                 
+            def mymethod4(self):
+                pass
+
+            def mymethod5(self):
+                pass
                 
         from djangotasks.models import register_task
         try:
+            register_task(MyClass.mymethod1, '''Some documentation''')
+            register_task(MyClass.mymethod2, '''Some other documentation''', MyClass.mymethod1)
             register_task(MyClass.mymethod3, None, MyClass.mymethod1, MyClass.mymethod2)
-            register_task(MyClass.mymethod1, '''Some documentation''', MyClass.mymethod2)
-            register_task(MyClass.mymethod2, '''Some other documentation''')
-            self.assertEquals([('mymethod3', '', 'mymethod1,mymethod2'),
-                               ('mymethod1', 'Some documentation', 'mymethod2'),
-                               ('mymethod2', 'Some other documentation', '')],
+            register_task(MyClass.mymethod4, None, [MyClass.mymethod1, MyClass.mymethod2])
+            register_task(MyClass.mymethod5, None, (MyClass.mymethod1, MyClass.mymethod2))
+            self.assertEquals([('mymethod1', 'Some documentation', ''), 
+                               ('mymethod2', 'Some other documentation', 'mymethod1'),
+                               ('mymethod3', '', 'mymethod1,mymethod2'),
+                               ('mymethod4', '', 'mymethod1,mymethod2'),
+                               ('mymethod5', '', 'mymethod1,mymethod2'),                               
+                              ],
                               TaskManager.DEFINED_TASKS['djangotasks.tests.MyClass'])
         finally:
             del TaskManager.DEFINED_TASKS['djangotasks.tests.MyClass']
@@ -356,7 +366,8 @@ class ViewsTestCase(unittest.TestCase):
 
     def test_tasks_get_task_for_object_required(self):
         task = Task.objects.task_for_object(TestModel, 'key-more', 'run_something_with_two_required')
-        self.assertEquals('run_something_long,run_something_with_required', task.required_methods)
+        self.assertEquals(['run_something_long', 'run_something_with_required'], 
+                          [required_task.method for required_task in task.get_required_tasks()])
         
     def test_tasks_archive_task(self):
         tasks = Task.objects.tasks_for_object(TestModel, 'key3')
