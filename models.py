@@ -103,7 +103,23 @@ class TaskManager(models.Manager):
             
     def run_task(self, pk):
         task = self.get(pk=pk)
+        self._run_required_tasks(task)
+        if task.status in ["scheduled", "running"]:
+            return
+        if task.status in ["requested_cancel"]:        
+            raise Exception("Task currently being cancelled, cannot run again")
+        if task.status in ["cancelled", "successful", "unsuccessful"]:
+            task = self._create_task(task.model, 
+                                     task.method, 
+                                     task.object_id)
+
+        task.status = "scheduled"
+        task.save()
+
+    def _run_required_tasks(self, task):
         for required_task in task.get_required_tasks():
+            self._run_required_tasks(required_task)
+
             if required_task.status in ['scheduled', 'successful', 'running']:
                 continue
             
@@ -117,19 +133,8 @@ class TaskManager(models.Manager):
                                                   required_task.object_id)
 
             required_task.status = "scheduled"
-            required_task.save()                
+            required_task.save()
             
-        if task.status in ["scheduled", "running", 
-                           "requested_cancel", ]:
-            raise Exception("Task already running, cannot run again")
-        if task.status in ["cancelled", "successful", "unsuccessful"]:
-            task = self._create_task(task.model, 
-                                     task.method, 
-                                     task.object_id)
-
-        task.status = "scheduled"
-        task.save()
-
     def cancel_task(self, pk):
         task = self.get(pk=pk)
         if task.status not in ["scheduled", "running"]:
@@ -313,8 +318,18 @@ class Task(models.Model):
     status_for_display.admin_order_field = 'status'
     status_for_display.short_description = 'Status'
 
-    def complete_log(self):
-        return '\n'.join([required_task.formatted_log() for required_task in self.get_required_tasks()] + [self.formatted_log()])
+    def complete_log(self):        
+        return '\n'.join([required_task.formatted_log() for required_task in self._unique_required_tasks()])
+
+    def _unique_required_tasks(self):
+        unique_required_tasks = []
+        for required_task in self.get_required_tasks():
+            for unique_required_task in required_task._unique_required_tasks():
+                if unique_required_task not in unique_required_tasks:
+                    unique_required_tasks.append(unique_required_task)                
+        if self not in unique_required_tasks:
+            unique_required_tasks.append(self)
+        return unique_required_tasks
 
     def formatted_log(self):
         from django.utils.dateformat import format

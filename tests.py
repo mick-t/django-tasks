@@ -81,53 +81,47 @@ class TestModel(object):
     def __init__(self, pk):
         self.pk = pk
 
+    def _run(self, trigger_name, sleep=0.2):
+        print "running %s" % trigger_name
+        sys.stdout.flush()
+        time.sleep(sleep)
+        self._trigger(trigger_name)
+
     def run_something_long(self, msg=''):
-        print "running something..."
-        sys.stdout.flush()
-        self._trigger("run_something_long_1")
-        time.sleep(0.2)
-        print "still running..."
-        sys.stdout.flush()
-        time.sleep(0.2)
-        self._trigger("run_something_long_2")
+        self._run("run_something_long_1", 0.0) # trigger right away, 
+        time.sleep(0.2) # then sleep
+        self._run("run_something_long_2")
         return "finished"
     
     def run_something_else(self):
         pass
 
     def run_something_failing(self):
-        print "running, will fail..."
-        sys.stdout.flush()
-        time.sleep(0.2)
-        self._trigger("run_something_failing")
+        self._run("run_something_failing")
         raise Exception("Failed !")
 
     def run_something_with_required(self):
-        print "running required..."
-        sys.stdout.flush()
-        time.sleep(0.2)
-        self._trigger("run_something_with_required")
+        self._run("run_something_with_required")
         return "finished required"
 
     def run_something_with_required_failing(self):
-        print "running required..."
-        sys.stdout.flush()
-        time.sleep(0.2)
-        self._trigger("run_something_with_required")
+        self._run("run_something_with_required")
         return "finished required"
 
     def run_something_with_two_required(self):
-        # not called in the tests
-        pass
+        self._run("run_something_with_two_required")
+        return "finished run_something_with_two_required"
+
+    def run_something_with_required_with_two_required(self):
+        self._run("run_something_with_required_with_two_required")
+        return "finished required with required"
 
     def run_a_method_that_is_not_registered(self):
         # not called in the tests
         pass
 
     def run_something_fast(self):
-        print "Doing something fast"
-        time.sleep(0.1)
-        self._trigger("run_something_fast")
+        self._run("run_something_fast", 0.1)
 
     def check_database_settings(self):
         from django.db import connection
@@ -141,6 +135,18 @@ class TestModel(object):
 def _start_message(task):
     return "INFO: Starting task " + str(task.pk) + "...\nINFO: ...Task " + str(task.pk) + " started.\n" 
     
+TEST_DEFINED_TASKS = [
+    ('run_something_long', "Run a successful task", ''),
+    ('run_something_else', "Run an empty task", ''),
+    ('run_something_failing', "Run a failing task", ''),
+    ('run_something_with_required', "Run a task with a required task", 'run_something_long'),
+    ('run_something_with_two_required', "Run a task with two required task", 'run_something_long,run_something_with_required'),
+    ('run_something_fast', "Run a fast task", ''),
+    ('run_something_with_required_failing', "Run a task with a required task that fails", 'run_something_failing'),
+    ('run_something_with_required_with_two_required', "Run a task with a required task that has a required task", "run_something_with_two_required"),
+    ('check_database_settings', "Checks the database settings", ''),
+    ]
+
 class ViewsTestCase(unittest.TestCase):
     def failUnlessRaises(self, excClassOrInstance, callableObj, *args, **kwargs):
         # improved method compared to unittest.TestCase.failUnlessRaises:
@@ -161,16 +167,7 @@ class ViewsTestCase(unittest.TestCase):
     assertRaises = failUnlessRaises
 
     def setUp(self):
-        TaskManager.DEFINED_TASKS['djangotasks.tests.TestModel'] = \
-            [('run_something_long', "Run a successful task", ''),
-             ('run_something_else', "Run an empty task", ''),
-             ('run_something_failing', "Run a failing task", ''),
-             ('run_something_with_required', "Run a task with a required task", 'run_something_long'),
-             ('run_something_with_two_required', "Run a task with two required task", 'run_something_long,run_something_with_required'),
-             ('run_something_fast', "Run a fast task", ''),
-             ('run_something_with_required_failing', "Run a task with a required task that fails", 'run_something_failing'),
-             ('check_database_settings', "Checks the database settings", ''),
-             ]
+        TaskManager.DEFINED_TASKS['djangotasks.tests.TestModel'] = TEST_DEFINED_TASKS
         import tempfile
         self.tempdir = tempfile.mkdtemp()
         import os
@@ -274,7 +271,7 @@ class ViewsTestCase(unittest.TestCase):
         self._wait_until('key1', 'run_something_long_2')
         time.sleep(0.5)
         new_task = Task.objects.get(pk=task.pk)
-        self.assertEquals(u'running something...\nstill running...\n'
+        self.assertEquals(u'running run_something_long_1\nrunning run_something_long_2\n'
                           , new_task.log)
         self.assertEquals("successful", new_task.status)
 
@@ -298,7 +295,7 @@ class ViewsTestCase(unittest.TestCase):
         self._wait_until('key with space', "run_something_fast")
         time.sleep(0.5)
         new_task = Task.objects.get(pk=task.pk)
-        self.assertEquals(u'Doing something fast\n'
+        self.assertEquals(u'running run_something_fast\n'
                           , new_task.log)
         self.assertEquals("successful", new_task.status)
 
@@ -320,8 +317,8 @@ class ViewsTestCase(unittest.TestCase):
 
         new_task = Task.objects.get(pk=task.pk)
         self.assertEquals("cancelled", new_task.status)
-        self.assertTrue(u'running something...' in new_task.log)
-        self.assertFalse(u'still running...' in new_task.log)
+        self.assertTrue(u'running run_something_long_1' in new_task.log)
+        self.assertFalse(u'running run_something_long_2' in new_task.log)
         self.assertFalse('finished' in new_task.log)
 
     def test_tasks_run_cancel_scheduled(self):
@@ -345,13 +342,13 @@ class ViewsTestCase(unittest.TestCase):
         time.sleep(0.5)
         new_task = Task.objects.get(pk=task.pk)
         self.assertEquals("unsuccessful", new_task.status)
-        self.assertTrue(u'running, will fail...' in new_task.log)
+        self.assertTrue(u'running run_something_failing' in new_task.log)
         self.assertTrue(u'raise Exception("Failed !")' in new_task.log)
         self.assertTrue(u'Exception: Failed !' in new_task.log)
     
     def test_tasks_get_tasks_for_object(self):
         tasks = Task.objects.tasks_for_object(TestModel, 'key2')
-        self.assertEquals(8, len(tasks))
+        self.assertEquals(len(TEST_DEFINED_TASKS), len(tasks))
         self.assertEquals('defined', tasks[0].status)
         self.assertEquals('defined', tasks[1].status)
         self.assertEquals('run_something_long', tasks[0].method)
@@ -393,6 +390,18 @@ class ViewsTestCase(unittest.TestCase):
         self.assertEquals(['run_something_long', 'run_something_with_required'],
                           [required_task.method for required_task in task.get_required_tasks()])
 
+    def _check_running(self, key, current_task, previous_task, task_name):
+        self._assert_status("scheduled", current_task)
+        with LogCheck(self, _start_message(current_task)):
+            Task.objects._do_schedule()
+        time.sleep(0.1)
+        self._assert_status("running", current_task)
+        if previous_task:
+            self._assert_status("successful", previous_task)
+        self._wait_until(key, task_name)
+        time.sleep(0.5)
+        self._assert_status("successful", current_task)
+
     def test_tasks_run_required_task_successful(self):
         required_task = Task.objects.task_for_object(TestModel, join(self.tempdir, 'key1'), 'run_something_long')
         task = self._create_task(TestModel.run_something_with_required, join(self.tempdir, 'key1'))
@@ -402,32 +411,96 @@ class ViewsTestCase(unittest.TestCase):
         self._assert_status("scheduled", task)
         self._assert_status("scheduled", required_task)
 
-        with LogCheck(self, _start_message(required_task)):
-            Task.objects._do_schedule()
-        time.sleep(0.5)
-        self._assert_status("scheduled", task)
-        self._assert_status("running", required_task)
+        self._check_running('key1', required_task, None, 'run_something_long_2')
+        self._check_running('key1', task, required_task, 'run_something_with_required')
 
-        self._wait_until('key1', 'run_something_long_2')
-        time.sleep(0.5)
-        self._assert_status("scheduled", task)
-        self._assert_status("successful", required_task)
-
-        with LogCheck(self, _start_message(task)):
-            Task.objects._do_schedule()
-        time.sleep(0.5)
-        self._assert_status("running", task)
-        self._assert_status("successful", required_task)
-        self._wait_until('key1', "run_something_with_required")
-        time.sleep(0.5)
-        self._assert_status("successful", task)
         task = Task.objects.get(pk=task.pk)
         complete_log, _ = DATETIME_REGEX.subn('', task.complete_log())
 
-        self.assertEquals(u'Run a successful task started on \nrunning something...\nstill running...\n\n' +
+        self.assertEquals(u'Run a successful task started on \n' + 
+                          u'running run_something_long_1\n' + 
+                          u'running run_something_long_2\n' + 
+                          u'\n' + 
                           u'Run a successful task finished successfully on \n' + 
-                          u'Run a task with a required task started on \nrunning required...\n\n' + 
+                          u'Run a task with a required task started on \n' + 
+                          u'running run_something_with_required\n' + 
+                          u'\n' + 
                           u'Run a task with a required task finished successfully on ', complete_log)
+
+    def test_tasks_run_two_required_tasks_successful(self):
+        key = join(self.tempdir, 'key2')
+        required_task = Task.objects.task_for_object(TestModel, key, 'run_something_long')
+        with_required_task = Task.objects.task_for_object(TestModel, key, 'run_something_with_required')
+        task = self._create_task(TestModel.run_something_with_two_required, key)
+        self.assertEquals("defined", required_task.status)
+
+        Task.objects.run_task(task.pk)
+        self._assert_status("scheduled", task)
+        self._assert_status("scheduled", required_task)
+
+        self._check_running('key2', required_task, None, 'run_something_long_2')
+        self._check_running('key2', with_required_task, required_task, 'run_something_with_required')
+        self._check_running('key2', task, with_required_task, 'run_something_with_two_required')
+
+        task = Task.objects.get(pk=task.pk)
+        complete_log, _ = DATETIME_REGEX.subn('', task.complete_log())
+
+        self.assertEquals(u'Run a successful task started on \n' + 
+                          u'running run_something_long_1\n' + 
+                          u'running run_something_long_2\n' + 
+                          u'\n' + 
+                          u'Run a successful task finished successfully on \n' + 
+                          u'Run a task with a required task started on \n' + 
+                          u'running run_something_with_required\n' + 
+                          u'\n' + 
+                          u'Run a task with a required task finished successfully on \n' + 
+                          u'Run a task with two required task started on \n' + 
+                          u'running run_something_with_two_required\n' + 
+                          u'\n' + 
+                          u'Run a task with two required task finished successfully on ',
+                          complete_log)
+
+    def test_tasks_run_required_with_two_required_tasks_successful(self):
+        key = join(self.tempdir, 'key3')
+        required_task = Task.objects.task_for_object(TestModel, key, 'run_something_long')
+        with_required_task = Task.objects.task_for_object(TestModel, key, 'run_something_with_required')
+        with_two_required_task = Task.objects.task_for_object(TestModel, key, 'run_something_with_two_required')
+        task = self._create_task(TestModel.run_something_with_required_with_two_required, key)
+        self.assertEquals("defined", required_task.status)
+
+        Task.objects.run_task(task.pk)
+
+        self._assert_status("scheduled", task)
+        self._assert_status("scheduled", with_required_task)
+        self._assert_status("scheduled", with_two_required_task)
+        self._assert_status("scheduled", required_task)
+
+        self._check_running('key3', required_task, None, 'run_something_long_2')
+        self._check_running('key3', with_required_task, required_task, "run_something_with_required")
+        self._check_running('key3', with_two_required_task, with_required_task, "run_something_with_two_required")
+        self._check_running('key3', task, with_two_required_task, "run_something_with_required_with_two_required")
+
+        task = Task.objects.get(pk=task.pk)
+        complete_log, _ = DATETIME_REGEX.subn('', task.complete_log())
+
+        self.assertEquals(u'Run a successful task started on \n' + 
+                          u'running run_something_long_1\n' + 
+                          u'running run_something_long_2\n' + 
+                          u'\n' + 
+                          u'Run a successful task finished successfully on \n' + 
+                          u'Run a task with a required task started on \n' + 
+                          u'running run_something_with_required\n' + 
+                          u'\n' + 
+                          u'Run a task with a required task finished successfully on \n' + 
+                          u'Run a task with two required task started on \n' + 
+                          u'running run_something_with_two_required\n' + 
+                          u'\n' + 
+                          u'Run a task with two required task finished successfully on \n' + 
+                          u'Run a task with a required task that has a required task started on \n' + 
+                          u'running run_something_with_required_with_two_required\n' + 
+                          u'\n' + 
+                          u'Run a task with a required task that has a required task finished successfully on ',
+                          complete_log)
 
     def test_tasks_run_required_task_failing(self):
         required_task = Task.objects.task_for_object(TestModel, join(self.tempdir, 'key1'), 'run_something_failing')
@@ -456,7 +529,7 @@ class ViewsTestCase(unittest.TestCase):
         task = Task.objects.get(pk=task.pk)
 
         complete_log, _ = DATETIME_REGEX.subn('', task.complete_log())
-        self.assertTrue(complete_log.startswith('Run a failing task started on \nrunning, will fail...\nTraceback (most recent call last):'))
+        self.assertTrue(complete_log.startswith('Run a failing task started on \nrunning run_something_failing\nTraceback (most recent call last):'))
         self.assertTrue(complete_log.endswith(u', in run_something_failing\n    raise Exception("Failed !")\nException: Failed !\n\n' + 
                                               u'Run a failing task finished with error on \n' + 
                                               u'Run a task with a required task that fails started\n' + 
@@ -491,7 +564,7 @@ class ViewsTestCase(unittest.TestCase):
         self.assertEquals(new_task.pk, tasks[5].pk)
         
 
-    def NOtest_tasks_exception_in_thread(self):
+    def test_tasks_exception_in_thread(self):
         task = self._create_task(TestModel.run_something_long, join(self.tempdir, 'key1'))
         Task.objects.run_task(task.pk)
         task = self._create_task(TestModel.run_something_long, join(self.tempdir, 'key1'))
@@ -503,13 +576,9 @@ class ViewsTestCase(unittest.TestCase):
         except Exception, e:
             self.assertEquals("Task matching query does not exist.", str(e))
             
-        output_check = LogCheck(self, fail_if_different=False)
-        with output_check:
+        with LogCheck(self, 'WARNING: Failed to change status from "scheduled" to "running" for task 1\n'):
             task.do_run()
             time.sleep(0.5)
-        self.assertTrue("Exception: Failed to mark task with " in output_check.log.getvalue())
-        self.assertTrue("as started, task does not exist" in output_check.log.getvalue())
-        self.assertTrue('INFO: failed to mark tasked as finished, from status "running" to "unsuccessful" for task' in output_check.log.getvalue())
 
     def test_compute_duration(self):
         from datetime import datetime
