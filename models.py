@@ -39,23 +39,17 @@ from datetime import datetime
 from os.path import join, exists, dirname, abspath
 from collections import defaultdict
 from django.db import transaction, connection
+from django.utils.encoding import smart_unicode
 
 
 LOG = logging.getLogger("djangotasks")
-
-def _qualified_class_name(the_class):
-    import inspect
-    if not inspect.isclass(the_class):
-        raise Exception(repr(the_class) + "is not a class")
-    return the_class.__module__ + '.' + the_class.__name__
-
 
 # this could be a decorator... if we could access the class at function definition time
 def register_task(method, documentation, *required_methods):
     import inspect
     if not inspect.ismethod(method):
         raise Exception(repr(method) + "is not a class method")
-    model = _qualified_class_name(method.im_class)
+    model = _get_model_name(method.im_class)
     if len(required_methods) == 1 and required_methods[0].__class__ in [list, tuple]:
         required_methods = required_methods[0]
 
@@ -70,11 +64,21 @@ def register_task(method, documentation, *required_methods):
                                              ','.join(required_method.im_func.__name__ 
                                                       for required_method in required_methods)))
                    
+def _get_model_name(model_class):
+    return smart_unicode(model_class._meta)
+
+def _get_model_class(model_name):
+    model = models.get_model(*model_name.split("."))
+    if model == None:
+        raise Exception("%s is not a registered model, cannot use this task" % model_name)
+    return model
+
+
 class TaskManager(models.Manager):
     DEFINED_TASKS = defaultdict(list)
 
     def task_for_object(self, the_class, object_id, method, status_in=None):
-        model = _qualified_class_name(the_class)
+        model = _get_model_name(the_class)
         if method not in [m for m, _, _ in TaskManager.DEFINED_TASKS[model]]:
             raise Exception("Method '%s' not registered for model '%s'" % (method, model))
 
@@ -96,7 +100,7 @@ class TaskManager(models.Manager):
         return task
 
     def tasks_for_object(self, the_class, object_id):
-        model = _qualified_class_name(the_class)
+        model = _get_model_name(the_class)
 
         return [self.task_for_object(the_class, object_id, method)
                 for method, _, _ in TaskManager.DEFINED_TASKS[model]]
@@ -147,7 +151,7 @@ class TaskManager(models.Manager):
 
     # The methods below are for internal use on the server. Don't use them directly.
     def _create_task(self, model, method, object_id):
-        return Task.objects.task_for_object(_my_import(model), object_id, method, 
+        return Task.objects.task_for_object(_get_model_class(model), object_id, method, 
                                             ["defined", "scheduled", "running", "requested_cancel"])
 
     def append_log(self, pk, log):
@@ -211,7 +215,7 @@ class TaskManager(models.Manager):
     # This is for use in the scheduler only. Don't use it directly.
     def exec_task(self, model, method, object_id):
         try:
-            the_class = _my_import(model)
+            the_class = _get_model_class(model)
             object = the_class.objects.get(pk=object_id)
             the_method =  getattr(object, method)
 
@@ -266,14 +270,6 @@ class TaskManager(models.Manager):
                 LOG.info("...Task %s started.", task.pk)
                 # only start one task at a time
                 break
-                
-def _my_import(name):
-    components = name.split('.')
-    mod = __import__('.'.join(components[:-1]))
-    for comp in components[1:]:
-        mod = getattr(mod, comp)
-    return mod
-
 
 STATUS_TABLE = [('defined', 'ready to run'),
                 ('scheduled', 'scheduled'),
@@ -458,11 +454,11 @@ class Task(models.Model):
 
     def get_required_tasks(self):
         taskdef = self._get_task_definition()
-        return [Task.objects.task_for_object(_my_import(self.model), self.object_id, method)
+        return [Task.objects.task_for_object(_get_model_class(self.model), self.object_id, method)
                 for method in taskdef[2].split(',') if method] if taskdef else []
     
     def find_method(self):
-        the_class = _my_import(self.model)
+        the_class = _get_model_class(self.model)
         object = the_class.objects.get(pk=self.object_id)
         return getattr(object, self.method)
 

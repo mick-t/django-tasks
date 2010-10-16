@@ -58,6 +58,9 @@ class Command(BaseCommand):
                 can_rollback = connection.creation._rollback_works()
                 connection.settings_dict["SUPPORTS_TRANSACTIONS"] = can_rollback
 
+            # Also register the test model
+            from djangotasks import test
+
         from djangotasks.models import Task, LOG
         # Ensure that task log messages will be sent to the standard output
         # thus caught in the task's log

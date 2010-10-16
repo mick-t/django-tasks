@@ -41,7 +41,8 @@ from os.path import join, dirname, basename, exists, join
 import re
 DATETIME_REGEX = re.compile('([a-zA-Z]+[.]? \d+\, \d\d\d\d at \d+(\:\d+)? [ap]\.m\.)|( \((\d+ hour(s)?(, )?)?(\d+ minute(s)?(, )?)?(\d+ second(s)?(, )?)?\))')
 
-from models import Task, TaskManager, LOG
+from djangotasks.models import Task, TaskManager, LOG
+from django.db import models
 
 class LogCheck(object):
     def __init__(self, test, expected_log = None, fail_if_different=True):
@@ -69,17 +70,14 @@ class LogCheck(object):
             self.test.assertEquals(self.expected_log, self.log.getvalue())
 
 
-class TestModel(object):
-    ''' A mock Model object for task tests'''
-    class Manager(object):
-        def get(self, pk):
-            if basename(pk) not in ['key1', 'key2', 'key3', 'key with space', 'key-more']:
-                raise Exception("Not a good object loaded")
-            return TestModel(pk)
+class TestModel(models.Model):
 
-    objects = Manager()
-    def __init__(self, pk):
-        self.pk = pk
+    key = models.CharField(
+        unique=True,
+        primary_key=True,
+        max_length = 90,
+    )
+
 
     def _run(self, trigger_name, sleep=0.2):
         print "running %s" % trigger_name
@@ -132,6 +130,8 @@ class TestModel(object):
     def _trigger(self, event):
         open(self.pk + event, 'w').writelines(["."])
 
+TESTMODEL_NAME = unicode(TestModel._meta)
+
 def _start_message(task):
     return "INFO: Starting task " + str(task.pk) + "...\nINFO: ...Task " + str(task.pk) + " started.\n" 
     
@@ -147,7 +147,7 @@ TEST_DEFINED_TASKS = [
     ('check_database_settings', "Checks the database settings", ''),
     ]
 
-class ViewsTestCase(unittest.TestCase):
+class TasksTestCase(unittest.TestCase):
     def failUnlessRaises(self, excClassOrInstance, callableObj, *args, **kwargs):
         # improved method compared to unittest.TestCase.failUnlessRaises:
         # also check the content of the exception
@@ -167,15 +167,16 @@ class ViewsTestCase(unittest.TestCase):
     assertRaises = failUnlessRaises
 
     def setUp(self):
-        TaskManager.DEFINED_TASKS['djangotasks.tests.TestModel'] = TEST_DEFINED_TASKS
+        TaskManager.DEFINED_TASKS['djangotasks.testmodel'] = TEST_DEFINED_TASKS
+        
         import tempfile
         self.tempdir = tempfile.mkdtemp()
         import os
         os.environ['DJANGOTASKS_TESTING'] = "YES"
 
     def tearDown(self):
-        del TaskManager.DEFINED_TASKS['djangotasks.tests.TestModel']
-        for task in Task.objects.filter(model='djangotasks.tests.TestModel'):
+        del TaskManager.DEFINED_TASKS['djangotasks.testmodel']
+        for task in Task.objects.filter(model='djangotasks.testmodel'):
             task.delete()
         import shutil
         shutil.rmtree(self.tempdir)
@@ -190,32 +191,46 @@ class ViewsTestCase(unittest.TestCase):
     #def _fixture_teardown(self):
     #    pass
 
-    def test_tasks_import(self):
-        from djangotasks.models import _my_import
-        self.assertEquals(TestModel, _my_import('djangotasks.tests.TestModel'))
+    def test__get_model_class(self):
+        from djangotasks.models import _get_model_class
+        self.assertEquals(TestModel, _get_model_class('djangotasks.testmodel'))
 
-    def _create_task(self, method, object_id):
-        from djangotasks.models import _qualified_class_name
-        return Task.objects._create_task(_qualified_class_name(method.im_class), 
+    def test__get_model_name(self):
+        from djangotasks.models import _get_model_name
+        self.assertEquals('djangotasks.testmodel', _get_model_name(TestModel))
+
+    def _create_task(self, method, object_id):        
+        from djangotasks.models import _get_model_name
+        method.im_class.objects.get_or_create(pk=object_id)
+        model = _get_model_name(method.im_class)
+        return Task.objects._create_task(model, 
                                          method.im_func.__name__, 
                                          object_id)
 
+    def _tasks_for_object(self, object_id):        
+        TestModel.objects.get_or_create(pk=object_id)
+        return Task.objects.tasks_for_object(TestModel, 
+                                             object_id)
+
+
+    def _task_for_object(self, object_id, method):
+        TestModel.objects.get_or_create(pk=object_id)
+        return Task.objects.task_for_object(TestModel, 
+                                             object_id, method)
 
     def test_tasks_invalid_method(self):
-        self.assertRaises(Exception("Method 'run_a_method_that_is_not_registered' not registered for model 'djangotasks.tests.TestModel'"), 
+        self.assertRaises(Exception("Method 'run_a_method_that_is_not_registered' not registered for model '%s'" % TESTMODEL_NAME),
                           self._create_task, TestModel.run_a_method_that_is_not_registered, 'key1')
 
         class NotAValidModel(object):
             def a_method(self):
                 pass
-        self.assertRaises(Exception("'module' object has no attribute 'NotAValidModel'"), 
+        self.assertRaises(Exception("type object 'NotAValidModel' has no attribute 'objects'"), 
                           self._create_task, NotAValidModel.a_method, 'key1')
             
-        self.assertRaises(Exception("Not a good object loaded"), 
-                          self._create_task, TestModel.run_something_long, 'key_that_does_not_exist')
-
     def test_tasks_register(self):
         class MyClass(object):
+            _meta = "djangotasks.myclass"
             def mymethod1(self):
                 pass
 
@@ -244,9 +259,9 @@ class ViewsTestCase(unittest.TestCase):
                                ('mymethod4', '', 'mymethod1,mymethod2'),
                                ('mymethod5', '', 'mymethod1,mymethod2'),                               
                               ],
-                              TaskManager.DEFINED_TASKS['djangotasks.tests.MyClass'])
+                              TaskManager.DEFINED_TASKS['djangotasks.myclass'])
         finally:
-            del TaskManager.DEFINED_TASKS['djangotasks.tests.MyClass']
+            del TaskManager.DEFINED_TASKS['djangotasks.myclass']
 
     def _wait_until(self, key, event):
         max = 100 # 10 seconds; on slow, loaded, Mac machines, a lower value doesn't seem to be enough
@@ -347,7 +362,7 @@ class ViewsTestCase(unittest.TestCase):
         self.assertTrue(u'Exception: Failed !' in new_task.log)
     
     def test_tasks_get_tasks_for_object(self):
-        tasks = Task.objects.tasks_for_object(TestModel, 'key2')
+        tasks = self._tasks_for_object('key2')
         self.assertEquals(len(TEST_DEFINED_TASKS), len(tasks))
         self.assertEquals('defined', tasks[0].status)
         self.assertEquals('defined', tasks[1].status)
@@ -355,19 +370,19 @@ class ViewsTestCase(unittest.TestCase):
         self.assertEquals('run_something_else', tasks[1].method)
 
     def test_tasks_get_task_for_object(self):
-        self.assertRaises(Exception("Method 'run_doesn_not_exists' not registered for model 'djangotasks.tests.TestModel'"), 
+        self.assertRaises(Exception("Method 'run_doesn_not_exists' not registered for model '%s'" % TESTMODEL_NAME), 
                           Task.objects.task_for_object, TestModel, 'key2', 'run_doesn_not_exists')
-        task = Task.objects.task_for_object(TestModel, 'key2', 'run_something_long')
+        task = self._task_for_object('key2', 'run_something_long')
         self.assertEquals('defined', task.status)
         self.assertEquals('run_something_long', task.method)
 
     def test_tasks_get_task_for_object_required(self):
-        task = Task.objects.task_for_object(TestModel, 'key-more', 'run_something_with_two_required')
+        task = self._task_for_object('key-more', 'run_something_with_two_required')
         self.assertEquals(['run_something_long', 'run_something_with_required'], 
                           [required_task.method for required_task in task.get_required_tasks()])
         
     def test_tasks_archive_task(self):
-        tasks = Task.objects.tasks_for_object(TestModel, 'key3')
+        tasks = self._tasks_for_object('key3')
         task = tasks[0]
         self.assertTrue(task.pk)
         task.status = 'successful'
@@ -377,7 +392,7 @@ class ViewsTestCase(unittest.TestCase):
                                      'key3')
         self.assertTrue(new_task.pk)
         self.assertTrue(task.pk != new_task.pk)
-        old_task = Task.objects.get(pk=task.pk)        
+        old_task = Task.objects.get(pk=task.pk)
         self.assertEquals(True, old_task.archived, "Task should have been archived once a new one has been created")
 
     def test_tasks_get_required_tasks(self):
@@ -403,7 +418,7 @@ class ViewsTestCase(unittest.TestCase):
         self._assert_status("successful", current_task)
 
     def test_tasks_run_required_task_successful(self):
-        required_task = Task.objects.task_for_object(TestModel, join(self.tempdir, 'key1'), 'run_something_long')
+        required_task = self._task_for_object(join(self.tempdir, 'key1'), 'run_something_long')
         task = self._create_task(TestModel.run_something_with_required, join(self.tempdir, 'key1'))
         self.assertEquals("defined", required_task.status)
 
@@ -429,8 +444,8 @@ class ViewsTestCase(unittest.TestCase):
 
     def test_tasks_run_two_required_tasks_successful(self):
         key = join(self.tempdir, 'key2')
-        required_task = Task.objects.task_for_object(TestModel, key, 'run_something_long')
-        with_required_task = Task.objects.task_for_object(TestModel, key, 'run_something_with_required')
+        required_task = self._task_for_object(key, 'run_something_long')
+        with_required_task = self._task_for_object(key, 'run_something_with_required')
         task = self._create_task(TestModel.run_something_with_two_required, key)
         self.assertEquals("defined", required_task.status)
 
@@ -462,9 +477,9 @@ class ViewsTestCase(unittest.TestCase):
 
     def test_tasks_run_required_with_two_required_tasks_successful(self):
         key = join(self.tempdir, 'key3')
-        required_task = Task.objects.task_for_object(TestModel, key, 'run_something_long')
-        with_required_task = Task.objects.task_for_object(TestModel, key, 'run_something_with_required')
-        with_two_required_task = Task.objects.task_for_object(TestModel, key, 'run_something_with_two_required')
+        required_task = self._task_for_object(key, 'run_something_long')
+        with_required_task = self._task_for_object(key, 'run_something_with_required')
+        with_two_required_task = self._task_for_object(key, 'run_something_with_two_required')
         task = self._create_task(TestModel.run_something_with_required_with_two_required, key)
         self.assertEquals("defined", required_task.status)
 
@@ -503,7 +518,7 @@ class ViewsTestCase(unittest.TestCase):
                           complete_log)
 
     def test_tasks_run_required_task_failing(self):
-        required_task = Task.objects.task_for_object(TestModel, join(self.tempdir, 'key1'), 'run_something_failing')
+        required_task = self._task_for_object(join(self.tempdir, 'key1'), 'run_something_failing')
         task = self._create_task(TestModel.run_something_with_required_failing, join(self.tempdir, 'key1'))
         self.assertEquals("defined", required_task.status)
 
@@ -537,7 +552,7 @@ class ViewsTestCase(unittest.TestCase):
         self.assertEquals("unsuccessful", task.status)
 
     def test_tasks_run_again(self):
-        tasks = Task.objects.tasks_for_object(TestModel, join(self.tempdir, 'key1'))
+        tasks = self._tasks_for_object(join(self.tempdir, 'key1'))
         task = tasks[5]
         self.assertEquals('run_something_fast', task.method)
         Task.objects.run_task(task.pk)
@@ -560,7 +575,7 @@ class ViewsTestCase(unittest.TestCase):
                           output_check.log.getvalue())
         self.assertTrue(new_task.pk != task.pk)
         self.assertEquals("successful", new_task.status)
-        tasks = Task.objects.tasks_for_object(TestModel, join(self.tempdir, 'key1'))
+        tasks = self._tasks_for_object(join(self.tempdir, 'key1'))
         self.assertEquals(new_task.pk, tasks[5].pk)
         
 
@@ -582,7 +597,7 @@ class ViewsTestCase(unittest.TestCase):
 
     def test_compute_duration(self):
         from datetime import datetime
-        task = Task.objects.tasks_for_object(TestModel, 'key1')[0]
+        task = self._tasks_for_object('key1')[0]
         task.start_date = datetime(2010, 10, 7, 14, 22, 17, 848801)
         task.end_date = datetime(2010, 10, 7, 17, 23, 43, 933740)
         self.assertEquals('3 hours, 1 minute, 26 seconds', task.duration)
