@@ -327,7 +327,7 @@ class ViewsTestCase(unittest.TestCase):
             Task.objects._do_schedule()
         Task.objects.run_task(task.pk)
         Task.objects.cancel_task(task.pk)
-        with LogCheck(self, "INFO: Cancelling task " + str(task.pk) + "...\nINFO: Task " + str(task.pk) + " finished with status \"cancelled\"\nINFO: ...Task 1 cancelled.\n"):
+        with LogCheck(self, "INFO: Cancelling task " + str(task.pk) + "...\nINFO: Task " + str(task.pk) + " finished with status \"cancelled\"\nINFO: ...Task " + str(task.pk) + " cancelled.\n"):
             Task.objects._do_schedule()
         new_task = Task.objects.get(pk=task.pk)
         self.assertEquals("cancelled", new_task.status)            
@@ -576,7 +576,7 @@ class ViewsTestCase(unittest.TestCase):
         except Exception, e:
             self.assertEquals("Task matching query does not exist.", str(e))
             
-        with LogCheck(self, 'WARNING: Failed to change status from "scheduled" to "running" for task 1\n'):
+        with LogCheck(self, 'WARNING: Failed to change status from "scheduled" to "running" for task %d\n' % task.pk):
             task.do_run()
             time.sleep(0.5)
 
