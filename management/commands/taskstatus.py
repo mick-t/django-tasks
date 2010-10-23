@@ -38,5 +38,5 @@ class Command(BaseCommand):
 
         LOG.addHandler(logging.StreamHandler())
         LOG.setLevel(logging.INFO)
-        for t in Task.objects.filter(status__in=['scheduled', 'running']):
+        for t in Task.objects.filter(status__in=['scheduled', 'running'], archived=False):
             LOG.info('Task with id %s (%s) is %s' % (t.pk, t.method, t.status))
