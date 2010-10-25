@@ -44,26 +44,6 @@ from django.utils.encoding import smart_unicode
 
 LOG = logging.getLogger("djangotasks")
 
-# this could be a decorator... if we could access the class at function definition time
-def register_task(method, documentation, *required_methods):
-    import inspect
-    if not inspect.ismethod(method):
-        raise Exception(repr(method) + "is not a class method")
-    model = _get_model_name(method.im_class)
-    if len(required_methods) == 1 and required_methods[0].__class__ in [list, tuple]:
-        required_methods = required_methods[0]
-
-    for required_method in required_methods:
-        if not inspect.ismethod(required_method):
-            raise Exception(repr(required_method) + " is not a class method")
-        if required_method.im_func.__name__ not in [method_name for method_name, _, _ in TaskManager.DEFINED_TASKS[model]]:
-            raise Exception(repr(required_method) + " is not registered as a task method for model " + model)
-            
-    TaskManager.DEFINED_TASKS[model].append((method.im_func.__name__, 
-                                             documentation if documentation else '',
-                                             ','.join(required_method.im_func.__name__ 
-                                                      for required_method in required_methods)))
-                   
 def _get_model_name(model_class):
     return smart_unicode(model_class._meta)
 
@@ -75,7 +55,38 @@ def _get_model_class(model_name):
 
 
 class TaskManager(models.Manager):
+    '''The TaskManager class is not for public use. 
+
+
+    The package-level API should not be sufficient to use django-tasks.
+    '''
+
+
+    # The only real role of DEFINED_TASKS, in fact, is to keep track of the *current* list of dependent tasks for each task.
+    # If we were to accept the fact that, when upgrading application code and changing the dependencies of tasks,
+    # it is acceptable that the tasks that already exist in the DB will still use the "old" set of dependencies,
+    # then we could store the list of dependencies as a field in the Task object, 
+    # and DEFINED_TASKS wouldn't be needed anymore. I'm still hesitating a little between the two solutions.
     DEFINED_TASKS = defaultdict(list)
+
+    def register_task(self, method, documentation, *required_methods):
+        import inspect
+        if not inspect.ismethod(method):
+            raise Exception(repr(method) + "is not a class method")
+        model = _get_model_name(method.im_class)
+        if len(required_methods) == 1 and required_methods[0].__class__ in [list, tuple]:
+            required_methods = required_methods[0]
+
+        for required_method in required_methods:
+            if not inspect.ismethod(required_method):
+                raise Exception(repr(required_method) + " is not a class method")
+            if required_method.im_func.__name__ not in [method_name for method_name, _, _ in TaskManager.DEFINED_TASKS[model]]:
+                raise Exception(repr(required_method) + " is not registered as a task method for model " + model)
+            
+        TaskManager.DEFINED_TASKS[model].append((method.im_func.__name__, 
+                                                 documentation if documentation else '',
+                                                 ','.join(required_method.im_func.__name__ 
+                                                          for required_method in required_methods)))
 
     def task_for_object(self, the_class, object_id, method, status_in=None):
         model = _get_model_name(the_class)
@@ -105,6 +116,12 @@ class TaskManager(models.Manager):
         return [self.task_for_object(the_class, object_id, method)
                 for method, _, _ in TaskManager.DEFINED_TASKS[model]]
             
+    def task_for_function(self, function):
+        function_name = _to_function_name(function)
+        function_task = FunctionTask.objects.get_or_create(function_name=function_name)
+        return self.task_for_object(FunctionTask, function_name,
+                                    FunctionTask.run_function_task.func_name)
+
     def run_task(self, pk):
         task = self.get(pk=pk)
         self._run_required_tasks(task)
@@ -119,6 +136,7 @@ class TaskManager(models.Manager):
 
         task.status = "scheduled"
         task.save()
+        return task
 
     def _run_required_tasks(self, task):
         for required_task in task.get_required_tasks():
@@ -249,7 +267,7 @@ class TaskManager(models.Manager):
                             archived=False)
         for task in tasks:
             LOG.info("Cancelling task %d...", task.pk)
-            task.do_cancel()
+            task._do_cancel()
             LOG.info("...Task %d cancelled.", task.pk)
 
         # ... Then start any new task
@@ -317,15 +335,13 @@ class Task(models.Model):
     def complete_log(self):        
         return '\n'.join([required_task.formatted_log() for required_task in self._unique_required_tasks()])
 
-    def _unique_required_tasks(self):
-        unique_required_tasks = []
-        for required_task in self.get_required_tasks():
-            for unique_required_task in required_task._unique_required_tasks():
-                if unique_required_task not in unique_required_tasks:
-                    unique_required_tasks.append(unique_required_task)                
-        if self not in unique_required_tasks:
-            unique_required_tasks.append(self)
-        return unique_required_tasks
+    def get_required_tasks(self):
+        taskdef = self._get_task_definition()
+        return [Task.objects.task_for_object(_get_model_class(self.model), self.object_id, method)
+                for method in taskdef[2].split(',') if method] if taskdef else []
+    
+    def can_run(self):
+        return self.status not in ["scheduled", "running", "requested_cancel", ] #"successful"
 
     def formatted_log(self):
         from django.utils.dateformat import format
@@ -342,7 +358,7 @@ class Task(models.Model):
         else:
             return self.description + ' ' +  self.status_string()
                     
-    # Only for use by the manager: do not call directly
+    # Only for use by the manager: do not call directly, except in tests
     def do_run(self):
         if self.status != "scheduled":
             raise Exception("Task not scheduled, cannot run again")
@@ -406,7 +422,7 @@ class Task(models.Model):
         import thread
         thread.start_new_thread(exec_thread, ())
 
-    def do_cancel(self):
+    def _do_cancel(self):
         if self.status != "requested_cancel":
             raise Exception("Cannot cancel task if not requested")
 
@@ -427,10 +443,19 @@ class Task(models.Model):
         finally:
             Task.objects.mark_finished(self.pk, "cancelled", "requested_cancel")
 
+    def _unique_required_tasks(self):
+        unique_required_tasks = []
+        for required_task in self.get_required_tasks():
+            for unique_required_task in required_task._unique_required_tasks():
+                if unique_required_task not in unique_required_tasks:
+                    unique_required_tasks.append(unique_required_task)                
+        if self not in unique_required_tasks:
+            unique_required_tasks.append(self)
+        return unique_required_tasks
+
     def save(self, *args, **kwargs):
         if not self.pk:
-            # new object: check if the method indeed exists
-            self.find_method() # will throw an exception if not defined
+            self._find_method() # will raise an exception if the method of this task is not registered
             
             # and time to archive the old ones
             for task in Task.objects.filter(model=self.model, 
@@ -452,18 +477,10 @@ class Task(models.Model):
             return None
         return taskdefs[0]
 
-    def get_required_tasks(self):
-        taskdef = self._get_task_definition()
-        return [Task.objects.task_for_object(_get_model_class(self.model), self.object_id, method)
-                for method in taskdef[2].split(',') if method] if taskdef else []
-    
-    def find_method(self):
+    def _find_method(self):
         the_class = _get_model_class(self.model)
         object = the_class.objects.get(pk=self.object_id)
         return getattr(object, self.method)
-
-    def can_run(self):
-        return self.status not in ["scheduled", "running", "requested_cancel", ] #"successful"
 
     def _compute_duration(self):
         if self.start_date and self.end_date:
@@ -477,6 +494,31 @@ class Task(models.Model):
     duration = property(_compute_duration)
             
     objects = TaskManager()
+
+def _to_function_name(function):
+    import inspect
+    if not inspect.isfunction(function):
+        raise Exception(repr(function) + "is not a function")
+    return function.__module__ + '.' + function.__name__
+
+
+def _to_function(function_name):
+    module_segments = function_name.split('.')
+    module = __import__('.'.join(module_segments[:-1]))
+    for segment in module_segments[1:]:
+        module = getattr(module, segment)
+    return module
+
+
+class FunctionTask(models.Model):
+    function_name = models.CharField(max_length=400,
+                                     primary_key=True)
+    def run_function_task(self):
+        function = _to_function(self.function_name)
+        return function()
+
+Task.objects.register_task(FunctionTask.run_function_task, "Run a function task")
+
 
 from django.conf import settings
 if 'DJANGOTASK_DAEMON_THREAD' in dir(settings) and settings.DJANGOTASK_DAEMON_THREAD:

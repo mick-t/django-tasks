@@ -41,8 +41,10 @@ from os.path import join, dirname, basename, exists, join
 import re
 DATETIME_REGEX = re.compile('([a-zA-Z]+[.]? \d+\, \d\d\d\d at \d+(\:\d+)? [ap]\.m\.)|( \((\d+ hour(s)?(, )?)?(\d+ minute(s)?(, )?)?(\d+ second(s)?(, )?)?\))')
 
-from djangotasks.models import Task, TaskManager, LOG
 from django.db import models
+
+import djangotasks
+from djangotasks import Task
 
 class LogCheck(object):
     def __init__(self, test, expected_log = None, fail_if_different=True):
@@ -51,6 +53,7 @@ class LogCheck(object):
         self.fail_if_different = fail_if_different
         
     def __enter__(self):
+        from djangotasks.models import LOG
         self.loghandlers = LOG.handlers
         LOG.handlers = []
         self.log = StringIO.StringIO()
@@ -60,6 +63,8 @@ class LogCheck(object):
         
     def __exit__(self, type, value, traceback):
         # Restore state
+        from djangotasks.models import LOG
+
         self.loghandlers = LOG.handlers
 
         # Check the output only if no exception occured (to avoid "eating" test failures)
@@ -135,6 +140,9 @@ TESTMODEL_NAME = unicode(TestModel._meta)
 def _start_message(task):
     return "INFO: Starting task " + str(task.pk) + "...\nINFO: ...Task " + str(task.pk) + " started.\n" 
     
+def _test_function():
+    print "running _test_function"
+
 TEST_DEFINED_TASKS = [
     ('run_something_long', "Run a successful task", ''),
     ('run_something_else', "Run an empty task", ''),
@@ -167,6 +175,7 @@ class TasksTestCase(unittest.TestCase):
     assertRaises = failUnlessRaises
 
     def setUp(self):
+        from djangotasks.models import TaskManager
         TaskManager.DEFINED_TASKS['djangotasks.testmodel'] = TEST_DEFINED_TASKS
         
         import tempfile
@@ -175,6 +184,7 @@ class TasksTestCase(unittest.TestCase):
         os.environ['DJANGOTASKS_TESTING'] = "YES"
 
     def tearDown(self):
+        from djangotasks.models import TaskManager
         del TaskManager.DEFINED_TASKS['djangotasks.testmodel']
         for task in Task.objects.filter(model='djangotasks.testmodel'):
             task.delete()
@@ -182,7 +192,7 @@ class TasksTestCase(unittest.TestCase):
         shutil.rmtree(self.tempdir)
         import os
         del os.environ['DJANGOTASKS_TESTING']
-
+        
     #  This may be needed for databases that can't share transactions (connections) accross threads (sqlite in particular):
     #  the tests tasks may need to be commited before the execution thread is started, which require transaction.commit to actually *do* the commit --
     #  and the original "_fixture_setup" causes "transaction.commit" to be transformed into a "nop" !!!
@@ -190,6 +200,32 @@ class TasksTestCase(unittest.TestCase):
     #    pass
     #def _fixture_teardown(self):
     #    pass
+
+    def test__to_function_name(self):
+        from djangotasks.models import _to_function_name
+        self.assertEquals('djangotasks.test._test_function', _to_function_name(_test_function))
+
+    def test__to_function(self):
+        from djangotasks.models import _to_function
+        self.assertEquals(_test_function, _to_function('djangotasks.test._test_function'))
+
+    def test_run_task_function(self):
+        task = djangotasks.task_for_function(_test_function)
+        task = djangotasks.run_task(task)
+        self.assertEquals("scheduled", task.status)
+        with LogCheck(self, _start_message(task)):
+            Task.objects._do_schedule()
+        i = 0
+        while i < 100: # 20 second should be enough
+            i += 1
+            time.sleep(0.2)
+            task = Task.objects.get(pk=task.pk)
+            if task.status == "successful":
+                break
+
+        self.assertEquals("successful", task.status)
+        self.assertEquals("running _test_function\n", task.log)
+        
 
     def test__get_model_class(self):
         from djangotasks.models import _get_model_class
@@ -199,34 +235,26 @@ class TasksTestCase(unittest.TestCase):
         from djangotasks.models import _get_model_name
         self.assertEquals('djangotasks.testmodel', _get_model_name(TestModel))
 
-    def _create_task(self, method, object_id):        
-        from djangotasks.models import _get_model_name
-        method.im_class.objects.get_or_create(pk=object_id)
-        model = _get_model_name(method.im_class)
-        return Task.objects._create_task(model, 
-                                         method.im_func.__name__, 
-                                         object_id)
-
     def _tasks_for_object(self, object_id):        
-        TestModel.objects.get_or_create(pk=object_id)
-        return Task.objects.tasks_for_object(TestModel, 
-                                             object_id)
+        key = join(self.tempdir, object_id)
+        object, _ = TestModel.objects.get_or_create(pk=key)
+        return djangotasks.tasks_for_object(object)
 
 
-    def _task_for_object(self, object_id, method):
-        TestModel.objects.get_or_create(pk=object_id)
-        return Task.objects.task_for_object(TestModel, 
-                                             object_id, method)
+    def _task_for_object(self, method, object_id):
+        key = join(self.tempdir, object_id)
+        object, _ = method.im_class.objects.get_or_create(pk=key)
+        return djangotasks.task_for_object(getattr(object, method.func_name))
 
     def test_tasks_invalid_method(self):
         self.assertRaises(Exception("Method 'run_a_method_that_is_not_registered' not registered for model '%s'" % TESTMODEL_NAME),
-                          self._create_task, TestModel.run_a_method_that_is_not_registered, 'key1')
+                          self._task_for_object, TestModel.run_a_method_that_is_not_registered, 'key1')
 
         class NotAValidModel(object):
             def a_method(self):
                 pass
         self.assertRaises(Exception("type object 'NotAValidModel' has no attribute 'objects'"), 
-                          self._create_task, NotAValidModel.a_method, 'key1')
+                          self._task_for_object, NotAValidModel.a_method, 'key1')
             
     def test_tasks_register(self):
         class MyClass(object):
@@ -246,13 +274,13 @@ class TasksTestCase(unittest.TestCase):
             def mymethod5(self):
                 pass
                 
-        from djangotasks.models import register_task
+        from djangotasks.models import TaskManager
         try:
-            register_task(MyClass.mymethod1, '''Some documentation''')
-            register_task(MyClass.mymethod2, '''Some other documentation''', MyClass.mymethod1)
-            register_task(MyClass.mymethod3, None, MyClass.mymethod1, MyClass.mymethod2)
-            register_task(MyClass.mymethod4, None, [MyClass.mymethod1, MyClass.mymethod2])
-            register_task(MyClass.mymethod5, None, (MyClass.mymethod1, MyClass.mymethod2))
+            djangotasks.register_task(MyClass.mymethod1, '''Some documentation''')
+            djangotasks.register_task(MyClass.mymethod2, '''Some other documentation''', MyClass.mymethod1)
+            djangotasks.register_task(MyClass.mymethod3, None, MyClass.mymethod1, MyClass.mymethod2)
+            djangotasks.register_task(MyClass.mymethod4, None, [MyClass.mymethod1, MyClass.mymethod2])
+            djangotasks.register_task(MyClass.mymethod5, None, (MyClass.mymethod1, MyClass.mymethod2))
             self.assertEquals([('mymethod1', 'Some documentation', ''), 
                                ('mymethod2', 'Some other documentation', 'mymethod1'),
                                ('mymethod3', '', 'mymethod1,mymethod2'),
@@ -279,48 +307,31 @@ class TasksTestCase(unittest.TestCase):
         self.assertEquals(expected_status, task.status)
 
     def test_tasks_run_successful(self):
-        task = self._create_task(TestModel.run_something_long, join(self.tempdir, 'key1'))
-        Task.objects.run_task(task.pk)
-        with LogCheck(self, _start_message(task)):
-            Task.objects._do_schedule()
-        self._wait_until('key1', 'run_something_long_2')
-        time.sleep(0.5)
-        new_task = Task.objects.get(pk=task.pk)
-        self.assertEquals(u'running run_something_long_1\nrunning run_something_long_2\n'
-                          , new_task.log)
-        self.assertEquals("successful", new_task.status)
+        task = self._task_for_object(TestModel.run_something_long, 'key1')
+        djangotasks.run_task(task)
+        self._check_running('key1', task, None, 'run_something_long_2',
+                            u'running run_something_long_1\nrunning run_something_long_2\n')
 
     def test_tasks_run_check_database(self):
-        task = self._create_task(TestModel.check_database_settings, join(self.tempdir, 'key1'))
-        Task.objects.run_task(task.pk)
-        with LogCheck(self, _start_message(task)):
-            Task.objects._do_schedule()
-        self._wait_until('key1', 'check_database_settings')
-        time.sleep(0.5)
-        new_task = Task.objects.get(pk=task.pk)
+        task = self._task_for_object(TestModel.check_database_settings, 'key1')
+        djangotasks.run_task(task)
         from django.db import connection
-        self.assertEquals(connection.settings_dict["NAME"] + u'\n' , new_task.log) # May fail if your Django settings define a different test database for each run: in which case you should modify it, to ensure it's always the same.
-        self.assertEquals("successful", new_task.status)
+        self._check_running('key1', task, None, 'check_database_settings', 
+                            connection.settings_dict["NAME"] + u'\n') # May fail if your Django settings define a different test database for each run: in which case you should modify it, to ensure it's always the same.
 
     def test_tasks_run_with_space_fast(self):
-        task = self._create_task(TestModel.run_something_fast, join(self.tempdir, 'key with space'))
-        Task.objects.run_task(task.pk)
-        with LogCheck(self, _start_message(task)):
-            Task.objects._do_schedule()
-        self._wait_until('key with space', "run_something_fast")
-        time.sleep(0.5)
-        new_task = Task.objects.get(pk=task.pk)
-        self.assertEquals(u'running run_something_fast\n'
-                          , new_task.log)
-        self.assertEquals("successful", new_task.status)
+        task = self._task_for_object(TestModel.run_something_fast, 'key with space')
+        djangotasks.run_task(task)
+        self._check_running('key with space', task, None, 'run_something_fast', 
+                            u'running run_something_fast\n')
 
     def test_tasks_run_cancel_running(self):
-        task = self._create_task(TestModel.run_something_long, join(self.tempdir, 'key1'))
-        Task.objects.run_task(task.pk)
+        task = self._task_for_object(TestModel.run_something_long, 'key1')
+        djangotasks.run_task(task)
         with LogCheck(self, _start_message(task)):
             Task.objects._do_schedule()
         self._wait_until('key1', "run_something_long_1")
-        Task.objects.cancel_task(task.pk)
+        djangotasks.cancel_task(task)
         output_check = LogCheck(self, fail_if_different=False)
         with output_check:
             Task.objects._do_schedule()
@@ -337,11 +348,11 @@ class TasksTestCase(unittest.TestCase):
         self.assertFalse('finished' in new_task.log)
 
     def test_tasks_run_cancel_scheduled(self):
-        task = self._create_task(TestModel.run_something_long, join(self.tempdir, 'key1'))
+        task = self._task_for_object(TestModel.run_something_long, 'key1')
         with LogCheck(self):
             Task.objects._do_schedule()
-        Task.objects.run_task(task.pk)
-        Task.objects.cancel_task(task.pk)
+        djangotasks.run_task(task)
+        djangotasks.cancel_task(task)
         with LogCheck(self, "INFO: Cancelling task " + str(task.pk) + "...\nINFO: Task " + str(task.pk) + " finished with status \"cancelled\"\nINFO: ...Task " + str(task.pk) + " cancelled.\n"):
             Task.objects._do_schedule()
         new_task = Task.objects.get(pk=task.pk)
@@ -349,8 +360,8 @@ class TasksTestCase(unittest.TestCase):
         self.assertEquals("", new_task.log)
 
     def test_tasks_run_failing(self):
-        task = self._create_task(TestModel.run_something_failing, join(self.tempdir, 'key1'))
-        Task.objects.run_task(task.pk)
+        task = self._task_for_object(TestModel.run_something_failing, 'key1')
+        djangotasks.run_task(task)
         with LogCheck(self, _start_message(task)):
             Task.objects._do_schedule()
         self._wait_until('key1', "run_something_failing")
@@ -370,14 +381,12 @@ class TasksTestCase(unittest.TestCase):
         self.assertEquals('run_something_else', tasks[1].method)
 
     def test_tasks_get_task_for_object(self):
-        self.assertRaises(Exception("Method 'run_doesn_not_exists' not registered for model '%s'" % TESTMODEL_NAME), 
-                          Task.objects.task_for_object, TestModel, 'key2', 'run_doesn_not_exists')
-        task = self._task_for_object('key2', 'run_something_long')
+        task = self._task_for_object(TestModel.run_something_long, 'key2')
         self.assertEquals('defined', task.status)
         self.assertEquals('run_something_long', task.method)
 
     def test_tasks_get_task_for_object_required(self):
-        task = self._task_for_object('key-more', 'run_something_with_two_required')
+        task = self._task_for_object(TestModel.run_something_with_two_required, 'key-more')
         self.assertEquals(['run_something_long', 'run_something_with_required'], 
                           [required_task.method for required_task in task.get_required_tasks()])
         
@@ -388,24 +397,24 @@ class TasksTestCase(unittest.TestCase):
         task.status = 'successful'
         task.save()
         self.assertEquals(False, task.archived)
-        new_task = self._create_task(TestModel.run_something_long,
-                                     'key3')
+        new_task = djangotasks.run_task(task)
+        
         self.assertTrue(new_task.pk)
         self.assertTrue(task.pk != new_task.pk)
         old_task = Task.objects.get(pk=task.pk)
         self.assertEquals(True, old_task.archived, "Task should have been archived once a new one has been created")
 
     def test_tasks_get_required_tasks(self):
-        task = self._create_task(TestModel.run_something_with_required, 'key1')
+        task = self._task_for_object(TestModel.run_something_with_required, 'key1')
         self.assertEquals(['run_something_long'],
                           [required_task.method for required_task in task.get_required_tasks()])
         
         
-        task = self._create_task(TestModel.run_something_with_two_required, 'key1')
+        task = self._task_for_object(TestModel.run_something_with_two_required, 'key1')
         self.assertEquals(['run_something_long', 'run_something_with_required'],
                           [required_task.method for required_task in task.get_required_tasks()])
 
-    def _check_running(self, key, current_task, previous_task, task_name):
+    def _check_running(self, key, current_task, previous_task, task_name, expected_log=None):
         self._assert_status("scheduled", current_task)
         with LogCheck(self, _start_message(current_task)):
             Task.objects._do_schedule()
@@ -416,13 +425,16 @@ class TasksTestCase(unittest.TestCase):
         self._wait_until(key, task_name)
         time.sleep(0.5)
         self._assert_status("successful", current_task)
+        if expected_log != None:
+            self.assertEquals(expected_log, 
+                              Task.objects.get(pk=current_task.pk).log)
 
     def test_tasks_run_required_task_successful(self):
-        required_task = self._task_for_object(join(self.tempdir, 'key1'), 'run_something_long')
-        task = self._create_task(TestModel.run_something_with_required, join(self.tempdir, 'key1'))
+        required_task = self._task_for_object(TestModel.run_something_long, 'key1')
+        task = self._task_for_object(TestModel.run_something_with_required, 'key1')
         self.assertEquals("defined", required_task.status)
 
-        Task.objects.run_task(task.pk)
+        djangotasks.run_task(task)
         self._assert_status("scheduled", task)
         self._assert_status("scheduled", required_task)
 
@@ -443,19 +455,19 @@ class TasksTestCase(unittest.TestCase):
                           u'Run a task with a required task finished successfully on ', complete_log)
 
     def test_tasks_run_two_required_tasks_successful(self):
-        key = join(self.tempdir, 'key2')
-        required_task = self._task_for_object(key, 'run_something_long')
-        with_required_task = self._task_for_object(key, 'run_something_with_required')
-        task = self._create_task(TestModel.run_something_with_two_required, key)
+        key = 'key2'
+        required_task = self._task_for_object(TestModel.run_something_long, key)
+        with_required_task = self._task_for_object(TestModel.run_something_with_required, key)
+        task = self._task_for_object(TestModel.run_something_with_two_required, key)
         self.assertEquals("defined", required_task.status)
 
-        Task.objects.run_task(task.pk)
+        djangotasks.run_task(task)
         self._assert_status("scheduled", task)
         self._assert_status("scheduled", required_task)
 
-        self._check_running('key2', required_task, None, 'run_something_long_2')
-        self._check_running('key2', with_required_task, required_task, 'run_something_with_required')
-        self._check_running('key2', task, with_required_task, 'run_something_with_two_required')
+        self._check_running(key, required_task, None, 'run_something_long_2')
+        self._check_running(key, with_required_task, required_task, 'run_something_with_required')
+        self._check_running(key, task, with_required_task, 'run_something_with_two_required')
 
         task = Task.objects.get(pk=task.pk)
         complete_log, _ = DATETIME_REGEX.subn('', task.complete_log())
@@ -476,24 +488,24 @@ class TasksTestCase(unittest.TestCase):
                           complete_log)
 
     def test_tasks_run_required_with_two_required_tasks_successful(self):
-        key = join(self.tempdir, 'key3')
-        required_task = self._task_for_object(key, 'run_something_long')
-        with_required_task = self._task_for_object(key, 'run_something_with_required')
-        with_two_required_task = self._task_for_object(key, 'run_something_with_two_required')
-        task = self._create_task(TestModel.run_something_with_required_with_two_required, key)
+        key = 'key3'
+        required_task = self._task_for_object(TestModel.run_something_long, key)
+        with_required_task = self._task_for_object(TestModel.run_something_with_required, key)
+        with_two_required_task = self._task_for_object(TestModel.run_something_with_two_required, key)
+        task = self._task_for_object(TestModel.run_something_with_required_with_two_required, key)
         self.assertEquals("defined", required_task.status)
 
-        Task.objects.run_task(task.pk)
+        djangotasks.run_task(task)
 
         self._assert_status("scheduled", task)
         self._assert_status("scheduled", with_required_task)
         self._assert_status("scheduled", with_two_required_task)
         self._assert_status("scheduled", required_task)
 
-        self._check_running('key3', required_task, None, 'run_something_long_2')
-        self._check_running('key3', with_required_task, required_task, "run_something_with_required")
-        self._check_running('key3', with_two_required_task, with_required_task, "run_something_with_two_required")
-        self._check_running('key3', task, with_two_required_task, "run_something_with_required_with_two_required")
+        self._check_running(key, required_task, None, 'run_something_long_2')
+        self._check_running(key, with_required_task, required_task, "run_something_with_required")
+        self._check_running(key, with_two_required_task, with_required_task, "run_something_with_two_required")
+        self._check_running(key, task, with_two_required_task, "run_something_with_required_with_two_required")
 
         task = Task.objects.get(pk=task.pk)
         complete_log, _ = DATETIME_REGEX.subn('', task.complete_log())
@@ -518,11 +530,11 @@ class TasksTestCase(unittest.TestCase):
                           complete_log)
 
     def test_tasks_run_required_task_failing(self):
-        required_task = self._task_for_object(join(self.tempdir, 'key1'), 'run_something_failing')
-        task = self._create_task(TestModel.run_something_with_required_failing, join(self.tempdir, 'key1'))
+        required_task = self._task_for_object(TestModel.run_something_failing, 'key1')
+        task = self._task_for_object(TestModel.run_something_with_required_failing, 'key1')
         self.assertEquals("defined", required_task.status)
 
-        Task.objects.run_task(task.pk)
+        djangotasks.run_task(task)
         self._assert_status("scheduled", task)
         self._assert_status("scheduled", required_task)
 
@@ -552,17 +564,17 @@ class TasksTestCase(unittest.TestCase):
         self.assertEquals("unsuccessful", task.status)
 
     def test_tasks_run_again(self):
-        tasks = self._tasks_for_object(join(self.tempdir, 'key1'))
+        tasks = self._tasks_for_object('key1')
         task = tasks[5]
         self.assertEquals('run_something_fast', task.method)
-        Task.objects.run_task(task.pk)
+        djangotasks.run_task(task)
         with LogCheck(self, _start_message(task)):
             Task.objects._do_schedule()
         self._wait_until('key1', "run_something_fast")
         time.sleep(0.5)
         self._reset('key1', "run_something_fast")
         self._assert_status("successful", task)
-        Task.objects.run_task(task.pk)
+        djangotasks.run_task(task)
         output_check = LogCheck(self, fail_if_different=False)
         with output_check:
             Task.objects._do_schedule()
@@ -575,15 +587,15 @@ class TasksTestCase(unittest.TestCase):
                           output_check.log.getvalue())
         self.assertTrue(new_task.pk != task.pk)
         self.assertEquals("successful", new_task.status)
-        tasks = self._tasks_for_object(join(self.tempdir, 'key1'))
+        tasks = self._tasks_for_object('key1')
         self.assertEquals(new_task.pk, tasks[5].pk)
         
 
     def test_tasks_exception_in_thread(self):
-        task = self._create_task(TestModel.run_something_long, join(self.tempdir, 'key1'))
-        Task.objects.run_task(task.pk)
-        task = self._create_task(TestModel.run_something_long, join(self.tempdir, 'key1'))
-        task_delete = self._create_task(TestModel.run_something_long, join(self.tempdir, 'key1'))
+        task = self._task_for_object(TestModel.run_something_long, 'key1')
+        djangotasks.run_task(task)
+        task = self._task_for_object(TestModel.run_something_long, 'key1')
+        task_delete = self._task_for_object(TestModel.run_something_long, 'key1')
         task_delete.delete()
         try:
             Task.objects.get(pk=task.pk)
