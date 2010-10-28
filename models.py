@@ -98,17 +98,32 @@ class TaskManager(models.Manager):
 
         if not status_in:
             status_in = dict(STATUS_TABLE).keys()
-        task, created = self.get_or_create(model=model, 
-                                           method=method,
-                                           object_id=str(object_id),
-                                           status__in=status_in,
-                                           archived=False)
+            
+        from django.core.exceptions import MultipleObjectsReturned
+        try:
+            task, created = self.get_or_create(model=model, 
+                                               method=method,
+                                               object_id=str(object_id),
+                                               status__in=status_in,
+                                               archived=False)
+        except MultipleObjectsReturned, e:
+            LOG.exception("Integrity error: multiple non-archived tasks, should not occur. Attempting recovery by archiving all tasks for this object and method, and recreating them")
+            objects = self.filter(model=model, 
+                                  method=method,
+                                  object_id=str(object_id),
+                                  status__in=status_in,
+                                  archived=False).update(archived=True)
+            task, created = self.get_or_create(model=model, 
+                                               method=method,
+                                               object_id=str(object_id),
+                                               status__in=status_in,
+                                               archived=False)
+
         if created:
-            task.description = taskdef[1]
-            task.save()
+            self.filter(pk=task.pk).update(description=taskdef[1])
 
         LOG.debug("Created task %d on model=%s, method=%s, object_id=%s", task.id, model, method, object_id)
-        return task
+        return self.get(pk=task.pk)
 
     def tasks_for_object(self, the_class, object_id):
         model = _get_model_name(the_class)
@@ -126,17 +141,16 @@ class TaskManager(models.Manager):
         task = self.get(pk=pk)
         self._run_required_tasks(task)
         if task.status in ["scheduled", "running"]:
-            return
+            return task
         if task.status in ["requested_cancel"]:        
             raise Exception("Task currently being cancelled, cannot run again")
         if task.status in ["cancelled", "successful", "unsuccessful"]:
             task = self._create_task(task.model, 
                                      task.method, 
                                      task.object_id)
-
-        task.status = "scheduled"
-        task.save()
-        return task
+            
+        self.filter(pk=task.pk).update(status="scheduled")
+        return self.get(pk=task.pk)
 
     def _run_required_tasks(self, task):
         for required_task in task.get_required_tasks():
@@ -174,61 +188,41 @@ class TaskManager(models.Manager):
 
     def append_log(self, pk, log):
         if log:
-            try:
-                cursor = connection.cursor()
-                cursor.execute('UPDATE ' + Task._meta.db_table + ' SET log = log || %s WHERE id = %s', [log, pk])
-                if cursor.rowcount == 0:
-                    raise Exception(("Failed to save log for task %d, task does not exist; log was:\n" % pk) + log)
-            finally:
-                transaction.commit_unless_managed()
+            # not possible to make it completely atomic in Django, it seems
+            rowcount = self.filter(pk=pk).update(log=(self.get(pk=pk).log + log))
+            if rowcount == 0:
+                raise Exception(("Failed to save log for task %d, task does not exist; log was:\n" % pk) + log)
 
     def mark_start(self, pk, pid):
         # Set the start information in all cases: That way, if it has been set
         # to "requested_cancel" already, it will be cancelled at the next loop of the scheduler
-        try:
-            cursor = connection.cursor()
-            cursor.execute('UPDATE ' + Task._meta.db_table + ' SET start_date = %s, pid = %s WHERE id = %s', 
-                           [datetime.now(),
-                            pid, 
-                            pk])
-            if cursor.rowcount == 0:
-                raise Exception("Failed to mark task with ID %d as started, task does not exist" % pk)
-        finally:
-            transaction.commit_unless_managed()
+        rowcount = self.filter(pk=pk).update(pid=pid, start_date=datetime.now())
+        if rowcount == 0:
+            raise Exception("Failed to mark task with ID %d as started, task does not exist" % pk)
 
     def _set_status(self, pk, new_status, existing_status):
-        try:
-            if isinstance(existing_status, str):
-                existing_status = [ existing_status ]
-                
-            cursor = connection.cursor()
-            cursor.execute('UPDATE ' + Task._meta.db_table + ' SET status = %s WHERE id = %s AND status IN ' 
-                           "(" + ", ".join(["%s"] * len(existing_status)) + ")",
-                           [new_status, pk] + existing_status)
-            if cursor.rowcount == 0:
-                LOG.warning('Failed to change status from %s to "%s" for task %s',
-                            "or".join('"' + status + '"' for status in existing_status), new_status, pk)
-
-            return cursor.rowcount != 0
-        finally:
-            transaction.commit_unless_managed()
+        if isinstance(existing_status, str):
+            existing_status = [ existing_status ]
             
+        if existing_status:
+            rowcount = self.filter(pk=pk).filter(status__in=existing_status).update(status=new_status)
+        else:
+            rowcount = self.filter(pk=pk).update(status=new_status)
+        if rowcount == 0:
+            LOG.warning('Failed to change status from %s to "%s" for task %s',
+                        "or".join('"' + status + '"' for status in existing_status) if existing_status else '(any)',
+                        new_status, pk)
+
+        return rowcount != 0
 
     def mark_finished(self, pk, new_status, existing_status):
-        try:
-            cursor = connection.cursor()
-            cursor.execute('UPDATE ' + Task._meta.db_table + ' SET status = %s, end_date = %s WHERE id = %s AND status = %s', 
-                                                   [new_status, 
-                                                    datetime.now(),
-                                                    pk, existing_status])
-            if cursor.rowcount == 0:
-               LOG.warning('Failed to mark tasked as finished, from status "%s" to "%s" for task %s. May have been finished in a different thread already.',
-                           existing_status, new_status, pk)
-            else:
-               LOG.info('Task %s finished with status "%s"', pk, new_status)
+        rowcount = self.filter(pk=pk).filter(status=existing_status).update(status=new_status, end_date=datetime.now())
+        if rowcount == 0:
+            LOG.warning('Failed to mark tasked as finished, from status "%s" to "%s" for task %s. May have been finished in a different thread already.',
+                        existing_status, new_status, pk)
+        else:
+            LOG.info('Task %s finished with status "%s"', pk, new_status)
                 
-        finally:
-            transaction.commit_unless_managed()
 
     # This is for use in the scheduler only. Don't use it directly.
     def exec_task(self, model, method, object_id):
@@ -406,6 +400,7 @@ class Task(models.Model):
                 Task.objects.append_log(self.pk, buf)
 
                 returncode = proc.returncode
+
             except Exception, e:
                 LOG.exception("Exception in calling thread for task %s", self.pk)
                 import traceback
@@ -457,13 +452,11 @@ class Task(models.Model):
         if not self.pk:
             self._find_method() # will raise an exception if the method of this task is not registered
             
-            # and time to archive the old ones
-            for task in Task.objects.filter(model=self.model, 
-                                            method=self.method,
-                                            object_id=self.object_id,
-                                            archived=False):
-                task.archived = True
-                task.save()
+            # time to archive the old ones
+            Task.objects.filter(model=self.model, 
+                                method=self.method,
+                                object_id=self.object_id,
+                                archived=False).update(archived=True)
 
         super(Task, self).save(*args, **kwargs)
 

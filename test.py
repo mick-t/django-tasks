@@ -619,3 +619,10 @@ class TasksTestCase(unittest.TestCase):
         self.assertEquals('1 hour, 32 seconds', task.duration)
         task.end_date = datetime(2010, 10, 7, 14, 22, 55, 933740)
         self.assertEquals('38 seconds', task.duration)
+
+    def test_MultipleObjectsReturned_in_tasks(self):
+        task = self._task_for_object(TestModel.run_something_long, 'key1')
+        task.pk = None
+        super(Task, task).save()
+        task = self._task_for_object(TestModel.run_something_long, 'key1')
+
