@@ -33,5 +33,7 @@ from djangotasks.models import Task
 class TaskAdmin(admin.ModelAdmin):
     list_display = ('model', 'method', 'object_id', 'start_date', 'end_date',
                     'duration', 'status_for_display', 'archived',)
+    list_filter = ('method',)
+    search_fields = ('object_id',)
     
 admin.site.register(Task, TaskAdmin)
