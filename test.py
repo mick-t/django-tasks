@@ -454,6 +454,18 @@ class TasksTestCase(unittest.TestCase):
                           u'\n' + 
                           u'Run a task with a required task finished successfully on ', complete_log)
 
+        complete_log_direct, _ = DATETIME_REGEX.subn('', task.complete_log(True))
+
+        self.assertEquals(u'Run a successful task started on \n' + 
+                          u'running run_something_long_1\n' + 
+                          u'running run_something_long_2\n' + 
+                          u'\n' + 
+                          u'Run a successful task finished successfully on \n' + 
+                          u'Run a task with a required task started on \n' + 
+                          u'running run_something_with_required\n' + 
+                          u'\n' + 
+                          u'Run a task with a required task finished successfully on ', complete_log_direct)
+
     def test_tasks_run_two_required_tasks_successful(self):
         key = 'key2'
         required_task = self._task_for_object(TestModel.run_something_long, key)
@@ -486,6 +498,23 @@ class TasksTestCase(unittest.TestCase):
                           u'\n' + 
                           u'Run a task with two required task finished successfully on ',
                           complete_log)
+
+        complete_log_direct, _ = DATETIME_REGEX.subn('', task.complete_log(True))
+
+        self.assertEquals(u'Run a successful task started on \n' + 
+                          u'running run_something_long_1\n' + 
+                          u'running run_something_long_2\n' + 
+                          u'\n' + 
+                          u'Run a successful task finished successfully on \n' + 
+                          u'Run a task with a required task started on \n' + 
+                          u'running run_something_with_required\n' + 
+                          u'\n' + 
+                          u'Run a task with a required task finished successfully on \n' + 
+                          u'Run a task with two required task started on \n' + 
+                          u'running run_something_with_two_required\n' + 
+                          u'\n' + 
+                          u'Run a task with two required task finished successfully on ',
+                          complete_log_direct)
 
     def test_tasks_run_required_with_two_required_tasks_successful(self):
         key = 'key3'
@@ -529,6 +558,18 @@ class TasksTestCase(unittest.TestCase):
                           u'Run a task with a required task that has a required task finished successfully on ',
                           complete_log)
 
+        complete_log_direct, _ = DATETIME_REGEX.subn('', task.complete_log(True))
+
+        self.assertEquals(u'Run a task with two required task started on \n' + 
+                          u'running run_something_with_two_required\n' + 
+                          u'\n' + 
+                          u'Run a task with two required task finished successfully on \n' + 
+                          u'Run a task with a required task that has a required task started on \n' + 
+                          u'running run_something_with_required_with_two_required\n' + 
+                          u'\n' + 
+                          u'Run a task with a required task that has a required task finished successfully on ',
+                          complete_log_direct)
+
     def test_tasks_run_required_task_failing(self):
         required_task = self._task_for_object(TestModel.run_something_failing, 'key1')
         task = self._task_for_object(TestModel.run_something_with_required_failing, 'key1')
@@ -561,6 +602,12 @@ class TasksTestCase(unittest.TestCase):
                                               u'Run a failing task finished with error on \n' + 
                                               u'Run a task with a required task that fails started\n' + 
                                               u'Run a task with a required task that fails finished with error'))
+        complete_log_direct, _ = DATETIME_REGEX.subn('', task.complete_log(True))
+        self.assertTrue(complete_log_direct.startswith('Run a failing task started on \nrunning run_something_failing\nTraceback (most recent call last):'))
+        self.assertTrue(complete_log_direct.endswith(u', in run_something_failing\n    raise Exception("Failed !")\nException: Failed !\n\n' + 
+                                                     u'Run a failing task finished with error on \n' + 
+                                                     u'Run a task with a required task that fails started\n' + 
+                                                     u'Run a task with a required task that fails finished with error'))
         self.assertEquals("unsuccessful", task.status)
 
     def test_tasks_run_again(self):

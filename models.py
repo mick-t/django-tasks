@@ -326,8 +326,9 @@ class Task(models.Model):
     status_for_display.admin_order_field = 'status'
     status_for_display.short_description = 'Status'
 
-    def complete_log(self):        
-        return '\n'.join([required_task.formatted_log() for required_task in self._unique_required_tasks()])
+    def complete_log(self, directly_required_only=False):
+        return '\n'.join([required_task.formatted_log() 
+                          for required_task in self._unique_required_tasks(directly_required_only)])
 
     def get_required_tasks(self):
         taskdef = self._get_task_definition()
@@ -438,12 +439,16 @@ class Task(models.Model):
         finally:
             Task.objects.mark_finished(self.pk, "cancelled", "requested_cancel")
 
-    def _unique_required_tasks(self):
+    def _unique_required_tasks(self, directly_required_only=False):
         unique_required_tasks = []
         for required_task in self.get_required_tasks():
-            for unique_required_task in required_task._unique_required_tasks():
-                if unique_required_task not in unique_required_tasks:
-                    unique_required_tasks.append(unique_required_task)                
+            if directly_required_only:
+                if required_task not in unique_required_tasks:
+                    unique_required_tasks.append(required_task)
+            else:
+                for unique_required_task in required_task._unique_required_tasks():
+                    if unique_required_task not in unique_required_tasks:
+                        unique_required_tasks.append(unique_required_task)
         if self not in unique_required_tasks:
             unique_required_tasks.append(self)
         return unique_required_tasks
