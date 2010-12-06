@@ -521,6 +521,8 @@ Task.objects.register_task(FunctionTask.run_function_task, "Run a function task"
 from django.conf import settings
 if 'DJANGOTASK_DAEMON_THREAD' in dir(settings) and settings.DJANGOTASK_DAEMON_THREAD:
     import logging
-    logging.basicConfig(level=logging.INFO)
+    logging.getLogger().addHandler(logging.StreamHandler())
+    logging.getLogger().setLevel(logging.INFO)
+
     import thread
     thread.start_new_thread(Task.objects.scheduler, ())
