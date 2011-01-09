@@ -35,6 +35,7 @@ import logging
 
 
 from django.db import models
+from django.conf import settings
 from datetime import datetime
 from os.path import join, exists, dirname, abspath
 from collections import defaultdict
@@ -361,14 +362,16 @@ class Task(models.Model):
         def exec_thread():
             returncode = -1
             try:
-                import manage
                 # Do not start if it's not marked as scheduled
                 # This ensures that we can have multiple schedulers
                 if not Task.objects._set_status(self.pk, "running", "scheduled"):
                     return
-
+                # execute the managemen utility, with the same python path as the current process
+                env = dict(os.environ)
+                env['PYTHONPATH'] = ':'.join(sys.path)
                 proc = subprocess.Popen([sys.executable, 
-                                         manage.__file__, 
+                                         '-c',
+                                         'from django.core.management import ManagementUtility; ManagementUtility().execute()',
                                          'runtask', 
                                          self.model, 
                                          self.method,
@@ -377,7 +380,7 @@ class Task(models.Model):
                                         stdout=subprocess.PIPE,
                                         stderr=subprocess.STDOUT,
                                         close_fds=True, 
-                                        env=os.environ)
+                                        env=env)
                 Task.objects.mark_start(self.pk, proc.pid)
                 buf = ''
                 t = time.time()
@@ -518,7 +521,6 @@ class FunctionTask(models.Model):
 Task.objects.register_task(FunctionTask.run_function_task, "Run a function task")
 
 
-from django.conf import settings
 if 'DJANGOTASK_DAEMON_THREAD' in dir(settings) and settings.DJANGOTASK_DAEMON_THREAD:
     import logging
     logging.getLogger().addHandler(logging.StreamHandler())
