@@ -512,7 +512,7 @@ def _to_function(function_name):
 
 
 class FunctionTask(models.Model):
-    function_name = models.CharField(max_length=400,
+    function_name = models.CharField(max_length=255,
                                      primary_key=True)
     def run_function_task(self):
         function = _to_function(self.function_name)
