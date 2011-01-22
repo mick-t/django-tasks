@@ -341,7 +341,7 @@ class Task(models.Model):
 
     def formatted_log(self):
         from django.utils.dateformat import format
-        FORMAT = "N j, Y \\a\\t P"
+        FORMAT = "N j, Y \\a\\t P T"
         if self.status in ['cancelled', 'successful', 'unsuccessful']:
             return (self.description + ' started' + ((' on ' + format(self.start_date, FORMAT)) if self.start_date else '') +
                     (("\n" + self.log) if self.log else "") + "\n" +
