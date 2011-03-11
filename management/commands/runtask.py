@@ -33,13 +33,13 @@ import logging
 from django.core.management.base import BaseCommand
 
 class Command(BaseCommand):
-    args = "model method object_id"
+    args = "task_id"
     
     def handle(self, *args, **options):
-        if len(args) != 3:
+        if len(args) != 1:
             self.print_help(sys.argv[0], sys.argv[1])
             return
-
+            
         if 'DJANGOTASKS_TESTING' in os.environ:
             # In tests, we make sure that we are using the right database connection
             # This code is heavily inspired by BaseDatabaseCreation._create_test_db in django/db/backends/creation.py

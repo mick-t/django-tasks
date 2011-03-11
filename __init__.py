@@ -88,3 +88,8 @@ def cancel_task(task):
 
     '''
     return Task.objects.cancel_task(task.pk)
+
+
+def current_task():
+    ''' In the proces that's executing a task, the task being executed. None in all other cases.'''
+    return Task.objects.current_task

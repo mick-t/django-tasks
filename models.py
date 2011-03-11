@@ -70,6 +70,10 @@ class TaskManager(models.Manager):
     # and DEFINED_TASKS wouldn't be needed anymore. I'm still hesitating a little between the two solutions.
     DEFINED_TASKS = defaultdict(list)
 
+    # When executing a task, the current task being executed. 
+    # Since only one task is executed per process, this can be a static.
+    current_task = None
+
     def register_task(self, method, documentation, *required_methods):
         import inspect
         if not inspect.ismethod(method):
@@ -226,11 +230,15 @@ class TaskManager(models.Manager):
                 
 
     # This is for use in the scheduler only. Don't use it directly.
-    def exec_task(self, model, method, object_id):
+    def exec_task(self, task_id):
+        if self.current_task:
+            raise Exception("Task already running running in process")
         try:
-            the_class = _get_model_class(model)
-            object = the_class.objects.get(pk=object_id)
-            the_method =  getattr(object, method)
+            self.current_task = self.get(pk=task_id)
+
+            the_class = _get_model_class(self.current_task.model)
+            object = the_class.objects.get(pk=self.current_task.object_id)
+            the_method =  getattr(object, self.current_task.method)
 
             the_method()
         finally:
@@ -373,9 +381,7 @@ class Task(models.Model):
                                          '-c',
                                          'from django.core.management import ManagementUtility; ManagementUtility().execute()',
                                          'runtask', 
-                                         self.model, 
-                                         self.method,
-                                         self.object_id, 
+                                         str(self.pk),
                                          ],
                                         stdout=subprocess.PIPE,
                                         stderr=subprocess.STDOUT,
