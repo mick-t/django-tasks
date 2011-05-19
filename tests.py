@@ -203,11 +203,11 @@ class TasksTestCase(unittest.TestCase):
 
     def test__to_function_name(self):
         from djangotasks.models import _to_function_name
-        self.assertEquals('djangotasks.test._test_function', _to_function_name(_test_function))
+        self.assertEquals('djangotasks.tests._test_function', _to_function_name(_test_function))
 
     def test__to_function(self):
         from djangotasks.models import _to_function
-        self.assertEquals(_test_function, _to_function('djangotasks.test._test_function'))
+        self.assertEquals(_test_function, _to_function('djangotasks.tests._test_function'))
 
     def test_run_task_function(self):
         task = djangotasks.task_for_function(_test_function)
@@ -597,17 +597,18 @@ class TasksTestCase(unittest.TestCase):
         task = Task.objects.get(pk=task.pk)
 
         complete_log, _ = DATETIME_REGEX.subn('', task.complete_log())
+        print "COMPLETELOG", complete_log
         self.assertTrue(complete_log.startswith('Run a failing task started on \nrunning run_something_failing\nTraceback (most recent call last):'))
         self.assertTrue(complete_log.endswith(u', in run_something_failing\n    raise Exception("Failed !")\nException: Failed !\n\n' + 
-                                              u'Run a failing task finished with error on \n' + 
+                                              u'Run a failing task failed on \n' + 
                                               u'Run a task with a required task that fails started\n' + 
-                                              u'Run a task with a required task that fails finished with error'))
+                                              u'Run a task with a required task that fails failed'))
         complete_log_direct, _ = DATETIME_REGEX.subn('', task.complete_log(True))
         self.assertTrue(complete_log_direct.startswith('Run a failing task started on \nrunning run_something_failing\nTraceback (most recent call last):'))
         self.assertTrue(complete_log_direct.endswith(u', in run_something_failing\n    raise Exception("Failed !")\nException: Failed !\n\n' + 
-                                                     u'Run a failing task finished with error on \n' + 
+                                                     u'Run a failing task failed on \n' + 
                                                      u'Run a task with a required task that fails started\n' + 
-                                                     u'Run a task with a required task that fails finished with error'))
+                                                     u'Run a task with a required task that fails failed'))
         self.assertEquals("unsuccessful", task.status)
 
     def test_tasks_run_again(self):

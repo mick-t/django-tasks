@@ -55,11 +55,13 @@ class Command(BaseCommand):
                     test_database_name = TEST_DATABASE_PREFIX + connection.settings_dict['NAME']
                     
                 connection.settings_dict["NAME"] = test_database_name
-                can_rollback = connection.creation._rollback_works()
-                connection.settings_dict["SUPPORTS_TRANSACTIONS"] = can_rollback
+                if hasattr(connection.creation, '_rollback_works'):
+                    # needed in Django 1.2, but not anymore in 1.3
+                    can_rollback = connection.creation._rollback_works()
+                    connection.settings_dict["SUPPORTS_TRANSACTIONS"] = can_rollback
 
             # Also register the test model
-            from djangotasks import test
+            from djangotasks import tests
 
         from djangotasks.models import Task, LOG
         # Ensure that task log messages will be sent to the standard output

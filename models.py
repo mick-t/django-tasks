@@ -298,7 +298,7 @@ STATUS_TABLE = [('defined', 'ready to run'),
                 ('requested_cancel', 'cancellation requested'),
                 ('cancelled', 'cancelled'),
                 ('successful', 'finished successfully'),
-                ('unsuccessful', 'finished with error'),
+                ('unsuccessful', 'failed'),
                 ]
 
           
