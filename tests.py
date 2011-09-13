@@ -216,7 +216,7 @@ class TasksTestCase(unittest.TestCase):
         with LogCheck(self, _start_message(task)):
             Task.objects._do_schedule()
         i = 0
-        while i < 100: # 20 second should be enough
+        while i < 100: # 20 seconds should be enough
             i += 1
             time.sleep(0.2)
             task = Task.objects.get(pk=task.pk)
@@ -292,10 +292,10 @@ class TasksTestCase(unittest.TestCase):
             del TaskManager.DEFINED_TASKS['djangotasks.myclass']
 
     def _wait_until(self, key, event):
-        max = 100 # 10 seconds; on slow, loaded, Mac machines, a lower value doesn't seem to be enough
+        max = 20 # 20 seconds; on slow, loaded machines (especially Macs), a lower value doesn't seem to be enough
         while not exists(join(self.tempdir, key + event)) and max:
             time.sleep(0.1)
-            max -= 1
+            max -= 0.1
         if not max:
             self.fail("Timeout on key=%s, event=%s" % (key, event))
         
@@ -597,7 +597,6 @@ class TasksTestCase(unittest.TestCase):
         task = Task.objects.get(pk=task.pk)
 
         complete_log, _ = DATETIME_REGEX.subn('', task.complete_log())
-        print "COMPLETELOG", complete_log
         self.assertTrue(complete_log.startswith('Run a failing task started on \nrunning run_something_failing\nTraceback (most recent call last):'))
         self.assertTrue(complete_log.endswith(u', in run_something_failing\n    raise Exception("Failed !")\nException: Failed !\n\n' + 
                                               u'Run a failing task failed on \n' + 
