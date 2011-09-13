@@ -59,7 +59,7 @@ class TaskManager(models.Manager):
     '''The TaskManager class is not for public use. 
 
 
-    The package-level API should not be sufficient to use django-tasks.
+    The package-level API should be sufficient to use django-tasks.
     '''
 
 
@@ -77,7 +77,7 @@ class TaskManager(models.Manager):
     def register_task(self, method, documentation, *required_methods):
         import inspect
         if not inspect.ismethod(method):
-            raise Exception(repr(method) + "is not a class method")
+            raise Exception(repr(method) + " is not a class method")
         model = _get_model_name(method.im_class)
         if len(required_methods) == 1 and required_methods[0].__class__ in [list, tuple]:
             required_methods = required_methods[0]
@@ -376,7 +376,7 @@ class Task(models.Model):
                     return
                 # execute the managemen utility, with the same python path as the current process
                 env = dict(os.environ)
-                env['PYTHONPATH'] = ':'.join(sys.path)
+                env['PYTHONPATH'] = os.pathsep.join(sys.path)
                 proc = subprocess.Popen([sys.executable, 
                                          '-c',
                                          'from django.core.management import ManagementUtility; ManagementUtility().execute()',
@@ -385,7 +385,7 @@ class Task(models.Model):
                                          ],
                                         stdout=subprocess.PIPE,
                                         stderr=subprocess.STDOUT,
-                                        close_fds=True, 
+                                        close_fds=(os.name != 'nt'), 
                                         env=env)
                 Task.objects.mark_start(self.pk, proc.pid)
                 buf = ''
@@ -505,7 +505,7 @@ class Task(models.Model):
 def _to_function_name(function):
     import inspect
     if not inspect.isfunction(function):
-        raise Exception(repr(function) + "is not a function")
+        raise Exception(repr(function) + " is not a function")
     return function.__module__ + '.' + function.__name__
 
 

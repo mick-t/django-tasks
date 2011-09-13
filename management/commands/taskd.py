@@ -70,7 +70,7 @@ class Daemon:
         # This processing (a callback function ?) would likely wait for a few seconds while checking for the creation of the pidfile,
         # then wait another few seconds that the pid actually continues existing: if it doesn't continue existing, 
         # it would simply print an error.       
-        become_daemon(our_home_dir="/", out_log='/dev/null', err_log='/dev/null')
+        become_daemon()
 
         atexit.register(self._delpid)
         self._setpid()
@@ -161,7 +161,8 @@ class Command(BaseCommand):
                 from django.conf import settings
                 settings.TASKS_LOG_FILE = ''
                 
-            daemon = TaskDaemon('/tmp/django-taskd.pid')
+            daemon = TaskDaemon(os.path.join(os.getenv('TEMP') if (os.name == 'nt') else '/tmp',
+                                             'django-taskd.pid'))
             getattr(daemon, args[0])()
         else:
             return "Usage: %s %s start|stop|restart|run\n" % (sys.argv[0], sys.argv[1])
