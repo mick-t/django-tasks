@@ -673,3 +673,23 @@ class TasksTestCase(unittest.TestCase):
         super(Task, task).save()
         task = self._task_for_object(TestModel.run_something_long, 'key1')
 
+    def test_send_signal_on_task_completed(self):
+        from djangotasks.models import TaskManager
+        from djangotasks.signals import task_completed
+        
+        def receiver(sender, **kwargs):
+            task = kwargs['task']
+            self.assertEqual(TaskManager, sender.__class__)
+            self.assertEqual(Task, task.__class__)
+            self.assertEqual(TestModel, kwargs['object'].__class__)
+            self.assertEqual('successful', task.status)
+            # Ensure that this function was called by the Signal
+            task.log = "Text added from the signal receiver"
+            task.save()
+        
+        task_completed.connect(receiver)
+        task = self._task_for_object(TestModel.run_something_fast, 'key1')
+        djangotasks.run_task(task)
+        self._check_running('key1', task, None, 'run_something_fast',
+                            u'Text added from the signal receiver')
+        task_completed.disconnect()

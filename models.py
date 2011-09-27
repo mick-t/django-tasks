@@ -33,7 +33,6 @@ import time
 import subprocess
 import logging
 
-
 from django.db import models
 from django.conf import settings
 from datetime import datetime
@@ -42,6 +41,7 @@ from collections import defaultdict
 from django.db import transaction, connection
 from django.utils.encoding import smart_unicode
 
+from djangotasks import signals
 
 LOG = logging.getLogger("djangotasks")
 
@@ -227,8 +227,11 @@ class TaskManager(models.Manager):
                         existing_status, new_status, pk)
         else:
             LOG.info('Task %s finished with status "%s"', pk, new_status)
-                
-
+            # Sending a task completion Signal including the task and the object
+            task = self.get(pk=pk)
+            object = _get_model_class(task.model).objects.get(pk=task.object_id)
+            signals.task_completed.send(sender=self, task=task, object=object)
+    
     # This is for use in the scheduler only. Don't use it directly.
     def exec_task(self, task_id):
         if self.current_task:
